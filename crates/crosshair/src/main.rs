@@ -105,7 +105,7 @@ unsafe fn run_overlay(
             biHeight: -(img_height as i32), // Top-down
             biPlanes: 1,
             biBitCount: 32,
-            biCompression: BI_RGB.0 as u32,
+            biCompression: BI_RGB.0,
             ..zeroed()
         },
         bmiColors: [zeroed(); 1],
@@ -257,7 +257,7 @@ unsafe fn run_overlay(
 
         // Every ~100ms, re-assert topmost (fights fullscreen games)
         counter = counter.wrapping_add(1);
-        if counter % 6 == 0 {
+        if counter.is_multiple_of(6) {
             let _ = SetWindowPos(
                 hwnd,
                 HWND_TOPMOST,

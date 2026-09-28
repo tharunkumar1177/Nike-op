@@ -93,6 +93,14 @@ enum UiEvent {
     Menu(MenuEvent),
 }
 
+/// Runner-owned orchestration state mutated while handling Settings commands.
+struct Orchestration {
+    engine_state: EngineState,
+    idempotency: IdempotencyCache,
+    overlay_handle: Option<OverlayHandle>,
+    macro_handle: Option<MacroWorkerHandle>,
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     tracing::info!("EdgeOptimizer.Runner starting...");
@@ -143,10 +151,12 @@ fn main() -> Result<()> {
     }));
 
     let mut settings_connected = false;
-    let mut engine_state = EngineState::Starting;
-    let mut idempotency = IdempotencyCache::default();
-    let mut overlay_handle: Option<OverlayHandle> = None;
-    let mut macro_handle: Option<MacroWorkerHandle> = None;
+    let mut orchestration = Orchestration {
+        engine_state: EngineState::Starting,
+        idempotency: IdempotencyCache::default(),
+        overlay_handle: None,
+        macro_handle: None,
+    };
     let mut should_exit = false;
 
     let mut last_click_time: Option<Instant> = None;
@@ -219,17 +229,14 @@ fn main() -> Result<()> {
                         send_runner_event(
                             &pipe_server,
                             &mut settings_connected,
-                            RunnerToSettingsEvent::EngineState(engine_state.clone()),
+                            RunnerToSettingsEvent::EngineState(orchestration.engine_state.clone()),
                         );
                     }
                     should_exit |= handle_settings_message(
                         msg,
                         &pipe_server,
                         &mut settings_connected,
-                        &mut engine_state,
-                        &mut idempotency,
-                        &mut overlay_handle,
-                        &mut macro_handle,
+                        &mut orchestration,
                         &mut tray,
                         &mut state_store,
                     )?;
@@ -252,7 +259,7 @@ fn main() -> Result<()> {
                 set_engine_state(
                     &pipe_server,
                     &mut settings_connected,
-                    &mut engine_state,
+                    &mut orchestration.engine_state,
                     next_state,
                 );
                 last_engine_probe = Instant::now();
@@ -260,10 +267,10 @@ fn main() -> Result<()> {
         }
     }
 
-    if let Some(handle) = overlay_handle.take() {
+    if let Some(handle) = orchestration.overlay_handle.take() {
         handle.stop();
     }
-    if let Some(handle) = macro_handle.take() {
+    if let Some(handle) = orchestration.macro_handle.take() {
         handle.stop();
     }
 
@@ -349,10 +356,7 @@ fn handle_settings_message(
     msg: GuiToTray,
     pipe_server: &NamedPipeServer,
     settings_connected: &mut bool,
-    engine_state: &mut EngineState,
-    idempotency: &mut IdempotencyCache,
-    overlay_handle: &mut Option<OverlayHandle>,
-    macro_handle: &mut Option<MacroWorkerHandle>,
+    orchestration: &mut Orchestration,
     tray: &mut TrayIconManager,
     state_store: &mut StateStore,
 ) -> Result<bool> {
@@ -394,7 +398,7 @@ fn handle_settings_message(
             }
         }
         GuiToTray::Orchestration(env) => {
-            if !idempotency.check_and_insert(&env.request_id) {
+            if !orchestration.idempotency.check_and_insert(&env.request_id) {
                 send_runner_event(
                     pipe_server,
                     settings_connected,
@@ -409,9 +413,7 @@ fn handle_settings_message(
                 env,
                 pipe_server,
                 settings_connected,
-                engine_state,
-                overlay_handle,
-                macro_handle,
+                orchestration,
                 tray,
                 state_store,
             )?;
@@ -424,12 +426,16 @@ fn process_orchestration_command(
     env: Envelope<SettingsToRunnerCommand>,
     pipe_server: &NamedPipeServer,
     settings_connected: &mut bool,
-    engine_state: &mut EngineState,
-    overlay_handle: &mut Option<OverlayHandle>,
-    macro_handle: &mut Option<MacroWorkerHandle>,
+    orchestration: &mut Orchestration,
     tray: &mut TrayIconManager,
     state_store: &mut StateStore,
 ) -> Result<()> {
+    let Orchestration {
+        engine_state,
+        overlay_handle,
+        macro_handle,
+        ..
+    } = orchestration;
     match env.payload {
         SettingsToRunnerCommand::ActivateProfile { profile, .. }
         | SettingsToRunnerCommand::RequestOptimization { profile, .. } => {
