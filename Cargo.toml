@@ -54,6 +54,7 @@ winresource = "0.1"
 [workspace.dependencies.windows]
 version = "0.52"
 features = [
+    "Foundation_Numerics",
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_Graphics_GdiPlus",
