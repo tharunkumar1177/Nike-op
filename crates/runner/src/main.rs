@@ -1,0 +1,708 @@
+//! EdgeOptimizer.Runner - System Tray Orchestrator
+//!
+//! Responsibilities:
+//! - Own tray icon/menu and user interaction loop
+//! - Forward optimization/cleanup intents from Settings to Engine service
+//! - Relay engine state/results back to Settings
+//! - Keep Settings process optional/on-demand
+
+#![windows_subsystem = "windows"]
+
+use anyhow::{Context, Result};
+use edge_optimizer_core::{
+    config,
+    crosshair_overlay::{self, OverlayHandle},
+    engine_ipc::EnginePipeClient,
+    ipc::{GuiToTray, NamedPipeServer, ProcessSnapshotEntry, TrayToGui},
+    macro_worker::MacroWorkerHandle,
+    orchestration::{
+        AuthContext, CleanupKind, EngineState, EngineToRunnerEvent, Envelope, IdempotencyCache,
+        OperationResult, RunnerToEngineCommand, RunnerToSettingsEvent, SettingsToRunnerCommand,
+    },
+    profile::Profile,
+    state_store::StateStore,
+    tray_icon::TrayIconManager,
+};
+use std::process::Command;
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::time::{Duration, Instant};
+use tray_icon::menu::MenuEvent;
+use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
+use windows::core::PCWSTR;
+use windows::Win32::Foundation::HWND;
+use windows::Win32::UI::WindowsAndMessaging::*;
+
+struct SingleInstanceGuard {
+    #[cfg(windows)]
+    mutex: windows::Win32::Foundation::HANDLE,
+}
+
+impl SingleInstanceGuard {
+    fn acquire() -> Result<Self> {
+        #[cfg(windows)]
+        {
+            use windows::Win32::Foundation::{WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT};
+            use windows::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
+
+            let mutex_name: Vec<u16> = "EdgeOptimizer.Runner.SingleInstance\0"
+                .encode_utf16()
+                .collect();
+
+            let mutex =
+                unsafe { CreateMutexW(None, false, windows::core::PCWSTR(mutex_name.as_ptr())) }
+                    .context("failed to create runner single-instance mutex")?;
+
+            let wait_result = unsafe { WaitForSingleObject(mutex, 0) };
+            if wait_result == WAIT_TIMEOUT {
+                unsafe {
+                    let _ = windows::Win32::Foundation::CloseHandle(mutex);
+                }
+                anyhow::bail!("EdgeOptimizer.Runner is already running");
+            }
+            if wait_result != WAIT_OBJECT_0 && wait_result != WAIT_ABANDONED {
+                unsafe {
+                    let _ = windows::Win32::Foundation::CloseHandle(mutex);
+                }
+                anyhow::bail!("failed to acquire single-instance mutex");
+            }
+
+            Ok(Self { mutex })
+        }
+
+        #[cfg(not(windows))]
+        {
+            Ok(Self {})
+        }
+    }
+}
+
+impl Drop for SingleInstanceGuard {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        unsafe {
+            let _ = windows::Win32::System::Threading::ReleaseMutex(self.mutex);
+            let _ = windows::Win32::Foundation::CloseHandle(self.mutex);
+        }
+    }
+}
+
+enum UiEvent {
+    Tray(TrayIconEvent),
+    Menu(MenuEvent),
+}
+
+fn main() -> Result<()> {
+    tracing_subscriber::fmt::init();
+    tracing::info!("EdgeOptimizer.Runner starting...");
+
+    let _instance_guard = match SingleInstanceGuard::acquire() {
+        Ok(guard) => guard,
+        Err(e) => {
+            tracing::warn!("{}", e);
+            return Ok(());
+        }
+    };
+
+    let mut state_store =
+        StateStore::open_default().context("failed to open Runner state store")?;
+    let legacy_config = config::load_config();
+    let legacy_profiles = config::get_data_directory()
+        .ok()
+        .and_then(|directory| edge_optimizer_core::profile::load_profiles(&directory).ok())
+        .unwrap_or_default();
+    if state_store.import_legacy_if_empty(
+        &legacy_profiles,
+        legacy_config.active_profile.as_deref(),
+        legacy_config.overlay_visible,
+    )? {
+        tracing::info!(
+            "migrated legacy JSON state into {}",
+            state_store.path().display()
+        );
+    }
+    let startup_state = state_store
+        .load_snapshot()
+        .context("failed to load startup state")?;
+    let mut tray = TrayIconManager::new(startup_state.active_profile.clone())
+        .context("failed to create tray icon manager")?;
+
+    let pipe_server = NamedPipeServer::new().context("failed to create named pipe server")?;
+
+    let (ui_tx, ui_rx) = mpsc::channel::<UiEvent>();
+    let tray_tx = ui_tx.clone();
+    let menu_tx = ui_tx;
+
+    TrayIconEvent::set_event_handler(Some(move |event| {
+        let _ = tray_tx.send(UiEvent::Tray(event));
+    }));
+
+    MenuEvent::set_event_handler(Some(move |event| {
+        let _ = menu_tx.send(UiEvent::Menu(event));
+    }));
+
+    let mut settings_connected = false;
+    let mut engine_state = EngineState::Starting;
+    let mut idempotency = IdempotencyCache::default();
+    let mut overlay_handle: Option<OverlayHandle> = None;
+    let mut macro_handle: Option<MacroWorkerHandle> = None;
+    let mut should_exit = false;
+
+    let mut last_click_time: Option<Instant> = None;
+    let mut pending_single_click = false;
+    let mut last_engine_probe = Instant::now() - Duration::from_secs(30);
+
+    unsafe {
+        let mut msg = MSG::default();
+        while !should_exit {
+            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                if msg.message == WM_QUIT {
+                    should_exit = true;
+                    break;
+                }
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+
+            let timeout = if pending_single_click {
+                Duration::from_millis(20)
+            } else {
+                Duration::from_millis(200)
+            };
+
+            match ui_rx.recv_timeout(timeout) {
+                Ok(UiEvent::Tray(event)) => handle_tray_event(
+                    event,
+                    &pipe_server,
+                    &mut settings_connected,
+                    &mut pending_single_click,
+                    &mut last_click_time,
+                ),
+                Ok(UiEvent::Menu(event)) => {
+                    should_exit |=
+                        handle_menu_event(event, &mut tray, &pipe_server, &mut settings_connected)?;
+                }
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => should_exit = true,
+            }
+
+            if pending_single_click {
+                if let Some(last_time) = last_click_time {
+                    if Instant::now().duration_since(last_time) >= Duration::from_millis(500) {
+                        pending_single_click = false;
+                        if settings_connected {
+                            if let Err(e) = pipe_server.send(&TrayToGui::ShowFlyout) {
+                                tracing::warn!("failed to send ShowFlyout via IPC: {}", e);
+                                settings_connected = false;
+                                let _ = spawn_settings_window(Some("--flyout-only"));
+                            }
+                        } else {
+                            let _ = spawn_settings_window(Some("--flyout-only"));
+                        }
+                    }
+                }
+            }
+
+            if !settings_connected {
+                match pipe_server.try_accept() {
+                    Ok(true) => settings_connected = true,
+                    Ok(false) => {}
+                    Err(error) => tracing::warn!("failed to accept Settings IPC: {}", error),
+                }
+            }
+
+            match pipe_server.try_recv() {
+                Ok(Some(msg)) => {
+                    if !settings_connected {
+                        settings_connected = true;
+                        send_runner_event(
+                            &pipe_server,
+                            &mut settings_connected,
+                            RunnerToSettingsEvent::EngineState(engine_state.clone()),
+                        );
+                    }
+                    should_exit |= handle_settings_message(
+                        msg,
+                        &pipe_server,
+                        &mut settings_connected,
+                        &mut engine_state,
+                        &mut idempotency,
+                        &mut overlay_handle,
+                        &mut macro_handle,
+                        &mut tray,
+                        &mut state_store,
+                    )?;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!("error reading settings IPC: {}", e);
+                    settings_connected = false;
+                }
+            }
+
+            if last_engine_probe.elapsed() >= Duration::from_secs(5) {
+                let probe_req = edge_optimizer_core::orchestration::next_request_id("runner-ping");
+                let next_state = match call_engine(&probe_req, RunnerToEngineCommand::Ping) {
+                    Ok(EngineToRunnerEvent::Pong) => EngineState::Ready,
+                    Ok(EngineToRunnerEvent::Error { .. }) => EngineState::Degraded,
+                    Ok(_) => EngineState::Ready,
+                    Err(_) => EngineState::Disconnected,
+                };
+                set_engine_state(
+                    &pipe_server,
+                    &mut settings_connected,
+                    &mut engine_state,
+                    next_state,
+                );
+                last_engine_probe = Instant::now();
+            }
+        }
+    }
+
+    if let Some(handle) = overlay_handle.take() {
+        handle.stop();
+    }
+    if let Some(handle) = macro_handle.take() {
+        handle.stop();
+    }
+
+    tracing::info!("EdgeOptimizer.Runner shutdown complete");
+    Ok(())
+}
+
+fn handle_tray_event(
+    event: TrayIconEvent,
+    pipe_server: &NamedPipeServer,
+    settings_connected: &mut bool,
+    pending_single_click: &mut bool,
+    last_click_time: &mut Option<Instant>,
+) {
+    if let TrayIconEvent::Click {
+        button,
+        button_state,
+        ..
+    } = event
+    {
+        if button == MouseButton::Left && button_state == MouseButtonState::Up {
+            let now = Instant::now();
+            let is_double_click = last_click_time
+                .map(|last| now.duration_since(last) < Duration::from_millis(500))
+                .unwrap_or(false);
+
+            if is_double_click {
+                *pending_single_click = false;
+                *last_click_time = None;
+                if *settings_connected {
+                    if let Err(e) = pipe_server.send(&TrayToGui::BringMainToFront) {
+                        tracing::warn!("failed to send BringMainToFront via IPC: {}", e);
+                        *settings_connected = false;
+                        let _ = spawn_settings_window(None);
+                    }
+                } else {
+                    let _ = spawn_settings_window(None);
+                }
+            } else {
+                *last_click_time = Some(now);
+                *pending_single_click = true;
+            }
+        }
+    }
+}
+
+fn handle_menu_event(
+    event: MenuEvent,
+    tray: &mut TrayIconManager,
+    pipe_server: &NamedPipeServer,
+    settings_connected: &mut bool,
+) -> Result<bool> {
+    if event.id == tray.menu_item_settings {
+        if *settings_connected {
+            if let Err(e) = pipe_server.send(&TrayToGui::BringMainToFront) {
+                tracing::warn!("failed to send BringMainToFront via IPC: {}", e);
+                *settings_connected = false;
+                spawn_settings_window(None)?;
+            }
+        } else {
+            spawn_settings_window(None)?;
+        }
+        return Ok(false);
+    }
+    if event.id == tray.menu_item_docs {
+        let _ = open::that("https://github.com/yourusername/EdgeOptimizer#readme");
+        return Ok(false);
+    }
+    if event.id == tray.menu_item_bug_report {
+        let _ = open::that("https://github.com/yourusername/EdgeOptimizer/issues/new");
+        return Ok(false);
+    }
+    if event.id == tray.menu_item_exit {
+        if *settings_connected {
+            let _ = pipe_server.send(&TrayToGui::Exit);
+        }
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn handle_settings_message(
+    msg: GuiToTray,
+    pipe_server: &NamedPipeServer,
+    settings_connected: &mut bool,
+    engine_state: &mut EngineState,
+    idempotency: &mut IdempotencyCache,
+    overlay_handle: &mut Option<OverlayHandle>,
+    macro_handle: &mut Option<MacroWorkerHandle>,
+    tray: &mut TrayIconManager,
+    state_store: &mut StateStore,
+) -> Result<bool> {
+    match msg {
+        GuiToTray::RequestState => {
+            let snapshot = state_store.load_snapshot()?;
+            if let Err(error) = pipe_server.send(&TrayToGui::StateSnapshot {
+                profiles: snapshot.profiles,
+                active_profile: snapshot.active_profile,
+                overlay_visible: snapshot.overlay_visible,
+            }) {
+                tracing::warn!("failed to send state snapshot: {}", error);
+                *settings_connected = false;
+            }
+        }
+        GuiToTray::ProfilesUpdated(profiles) => {
+            state_store.save_profiles(&profiles)?;
+        }
+        GuiToTray::ActiveProfileChanged(active) => {
+            state_store.set_active_profile(active.as_deref())?;
+            tray.set_active_profile(active);
+        }
+        GuiToTray::OverlayVisibilityChanged(visible) => {
+            state_store.set_overlay_visible(visible)?;
+        }
+        GuiToTray::Shutdown => return Ok(true),
+        GuiToTray::RequestProcessSnapshot => {
+            let processes = edge_optimizer_core::process::list_processes()
+                .into_iter()
+                .map(|process| ProcessSnapshotEntry {
+                    name: process.name,
+                    cpu_percent: process.cpu_percent,
+                    memory_kb: process.memory_kb,
+                })
+                .collect();
+            if let Err(error) = pipe_server.send(&TrayToGui::ProcessSnapshot(processes)) {
+                tracing::warn!("failed to send process snapshot: {}", error);
+                *settings_connected = false;
+            }
+        }
+        GuiToTray::Orchestration(env) => {
+            if !idempotency.check_and_insert(&env.request_id) {
+                send_runner_event(
+                    pipe_server,
+                    settings_connected,
+                    RunnerToSettingsEvent::Ack {
+                        message: format!("Duplicate request ignored: {}", env.request_id),
+                    },
+                );
+                return Ok(false);
+            }
+
+            process_orchestration_command(
+                env,
+                pipe_server,
+                settings_connected,
+                engine_state,
+                overlay_handle,
+                macro_handle,
+                tray,
+                state_store,
+            )?;
+        }
+    }
+    Ok(false)
+}
+
+fn process_orchestration_command(
+    env: Envelope<SettingsToRunnerCommand>,
+    pipe_server: &NamedPipeServer,
+    settings_connected: &mut bool,
+    engine_state: &mut EngineState,
+    overlay_handle: &mut Option<OverlayHandle>,
+    macro_handle: &mut Option<MacroWorkerHandle>,
+    tray: &mut TrayIconManager,
+    state_store: &mut StateStore,
+) -> Result<()> {
+    match env.payload {
+        SettingsToRunnerCommand::ActivateProfile { profile, .. }
+        | SettingsToRunnerCommand::RequestOptimization { profile, .. } => {
+            set_engine_state(
+                pipe_server,
+                settings_connected,
+                engine_state,
+                EngineState::Starting,
+            );
+            let profile_to_persist = profile.clone();
+            let event = optimize_profile(env.request_id, profile, overlay_handle, macro_handle);
+            if matches!(event, RunnerToSettingsEvent::OptimizationResult(ref r) if r.success) {
+                state_store.save_active_profile(&profile_to_persist)?;
+                tray.set_active_profile(Some(profile_to_persist.name.clone()));
+                set_engine_state(
+                    pipe_server,
+                    settings_connected,
+                    engine_state,
+                    EngineState::Ready,
+                );
+            } else {
+                set_engine_state(
+                    pipe_server,
+                    settings_connected,
+                    engine_state,
+                    EngineState::Degraded,
+                );
+            }
+            send_runner_event(pipe_server, settings_connected, event);
+        }
+        SettingsToRunnerCommand::RequestCleanup { cleanup_kind } => {
+            let event = request_cleanup(env.request_id, cleanup_kind);
+            if matches!(event, RunnerToSettingsEvent::CleanupResult(ref r) if r.success) {
+                set_engine_state(
+                    pipe_server,
+                    settings_connected,
+                    engine_state,
+                    EngineState::Ready,
+                );
+            } else {
+                set_engine_state(
+                    pipe_server,
+                    settings_connected,
+                    engine_state,
+                    EngineState::Degraded,
+                );
+            }
+            send_runner_event(pipe_server, settings_connected, event);
+        }
+        SettingsToRunnerCommand::PreviewImpact { profile } => {
+            let message = format!(
+                "Preview: {} process(es) selected for optimization",
+                profile.processes_to_kill.len()
+            );
+            send_runner_event(
+                pipe_server,
+                settings_connected,
+                RunnerToSettingsEvent::Ack { message },
+            );
+        }
+        SettingsToRunnerCommand::OpenFlyout => {
+            if let Err(e) = pipe_server.send(&TrayToGui::ShowFlyout) {
+                tracing::warn!("failed to send ShowFlyout to settings: {}", e);
+                *settings_connected = false;
+            }
+        }
+        SettingsToRunnerCommand::OpenSettings => {
+            if let Err(e) = pipe_server.send(&TrayToGui::BringMainToFront) {
+                tracing::warn!("failed to send BringMainToFront to settings: {}", e);
+                *settings_connected = false;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn optimize_profile(
+    request_id: String,
+    profile: Profile,
+    overlay_handle: &mut Option<OverlayHandle>,
+    macro_handle: &mut Option<MacroWorkerHandle>,
+) -> RunnerToSettingsEvent {
+    let command = RunnerToEngineCommand::ApplyProfile {
+        profile: profile.clone(),
+    };
+
+    let mut result = match call_engine(&request_id, command) {
+        Ok(EngineToRunnerEvent::Result(result)) => result,
+        Ok(EngineToRunnerEvent::Error { message, .. }) => {
+            return RunnerToSettingsEvent::UserActionRequired {
+                reason: format!("Engine rejected optimization: {}", message),
+            };
+        }
+        Ok(other) => {
+            return RunnerToSettingsEvent::UserActionRequired {
+                reason: format!("Unexpected engine response: {:?}", other),
+            };
+        }
+        Err(e) => {
+            return RunnerToSettingsEvent::UserActionRequired {
+                reason: format!(
+                    "Engine unavailable. Ensure EdgeOptimizer_EngineSvc is running. {}",
+                    e
+                ),
+            };
+        }
+    };
+
+    if let Some(handle) = overlay_handle.take() {
+        handle.stop();
+    }
+
+    if profile.overlay_enabled {
+        match &profile.crosshair_image_path {
+            Some(path) => match crosshair_overlay::start_overlay(
+                path.clone(),
+                profile.crosshair_x_offset,
+                profile.crosshair_y_offset,
+            ) {
+                Ok(handle) => {
+                    *overlay_handle = Some(handle);
+                    result.summary = format!("{} | crosshair=on", result.summary);
+                }
+                Err(e) => {
+                    result.success = false;
+                    result.summary = format!("{} | crosshair_error={}", result.summary, e);
+                }
+            },
+            None => {
+                result.summary = format!("{} | crosshair=skipped(no-image)", result.summary);
+            }
+        }
+    } else {
+        result.summary = format!("{} | crosshair=off", result.summary);
+    }
+
+    if let Some(handle) = macro_handle.take() {
+        handle.stop();
+    }
+    if profile.macros.macros.iter().any(|macro_def| macro_def.enabled) {
+        match MacroWorkerHandle::start(profile.macros.clone()) {
+            Ok(handle) => {
+                *macro_handle = Some(handle);
+                result.summary = format!("{} | macros=on", result.summary);
+            }
+            Err(error) => {
+                result.success = false;
+                result.summary = format!("{} | macro_error={}", result.summary, error);
+            }
+        }
+    } else {
+        result.summary = format!("{} | macros=off", result.summary);
+    }
+
+    RunnerToSettingsEvent::OptimizationResult(result)
+}
+
+fn request_cleanup(request_id: String, cleanup_kind: CleanupKind) -> RunnerToSettingsEvent {
+    let command = RunnerToEngineCommand::RunCleanup {
+        cleanup_kind: cleanup_kind.clone(),
+    };
+
+    match call_engine(&request_id, command) {
+        Ok(EngineToRunnerEvent::Result(result)) => RunnerToSettingsEvent::CleanupResult(result),
+        Ok(EngineToRunnerEvent::Error { message, .. }) => {
+            RunnerToSettingsEvent::CleanupResult(OperationResult::error(
+                request_id,
+                format!("cleanup failed ({}): {}", cleanup_kind.as_str(), message),
+            ))
+        }
+        Ok(other) => RunnerToSettingsEvent::CleanupResult(OperationResult::error(
+            request_id,
+            format!("unexpected engine response: {:?}", other),
+        )),
+        Err(e) => RunnerToSettingsEvent::CleanupResult(OperationResult::error(
+            request_id,
+            format!("engine unavailable: {}", e),
+        )),
+    }
+}
+
+fn call_engine(request_id: &str, command: RunnerToEngineCommand) -> Result<EngineToRunnerEvent> {
+    let client = EnginePipeClient::connect_default(Duration::from_secs(2))
+        .context("failed to connect to engine pipe")?;
+
+    let request = Envelope::with_request_id(
+        "edge-runner",
+        AuthContext::RunnerService,
+        request_id.to_string(),
+        command,
+    );
+
+    client
+        .send(&request)
+        .context("failed to send command to engine")?;
+    let response: Option<Envelope<EngineToRunnerEvent>> =
+        client.recv().context("failed to receive engine response")?;
+
+    response
+        .map(|env| env.payload)
+        .ok_or_else(|| anyhow::anyhow!("engine disconnected without response"))
+}
+
+fn send_runner_event(
+    pipe_server: &NamedPipeServer,
+    settings_connected: &mut bool,
+    event: RunnerToSettingsEvent,
+) {
+    if !*settings_connected {
+        return;
+    }
+    let env = Envelope::new("edge-runner", AuthContext::RunnerService, event);
+    if let Err(e) = pipe_server.send(&TrayToGui::OrchestrationEvent(env)) {
+        tracing::warn!("failed to send runner event to settings: {}", e);
+        *settings_connected = false;
+    }
+}
+
+fn set_engine_state(
+    pipe_server: &NamedPipeServer,
+    settings_connected: &mut bool,
+    current: &mut EngineState,
+    next: EngineState,
+) {
+    if *current == next {
+        return;
+    }
+    *current = next.clone();
+    tracing::info!("Engine state -> {:?}", next);
+    send_runner_event(
+        pipe_server,
+        settings_connected,
+        RunnerToSettingsEvent::EngineState(next),
+    );
+}
+
+fn spawn_settings_window(flag: Option<&str>) -> Result<()> {
+    if bring_existing_settings_to_front() {
+        return Ok(());
+    }
+
+    let exe_dir = std::env::current_exe()?
+        .parent()
+        .context("failed to get executable directory")?
+        .to_path_buf();
+
+    let target = exe_dir.join("EdgeOptimizer.Settings.WinUI.exe");
+    if !target.exists() {
+        anyhow::bail!(
+            "WinUI Settings executable not found at {:?}. Publish apps/EdgeOptimizer.Settings.WinUI beside the Runner executable.",
+            target
+        );
+    }
+
+    let mut cmd = Command::new(&target);
+    if let Some(f) = flag {
+        cmd.arg(f);
+    }
+    cmd.spawn().context("failed to spawn Settings process")?;
+    Ok(())
+}
+
+fn bring_existing_settings_to_front() -> bool {
+    unsafe {
+        let settings_title: Vec<u16> = "Edge Optimizer\0".encode_utf16().collect();
+        let hwnd = FindWindowW(None, PCWSTR(settings_title.as_ptr()));
+
+        if hwnd != HWND::default() {
+            if IsIconic(hwnd).as_bool() {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+            }
+            let _ = SetForegroundWindow(hwnd);
+            let _ = BringWindowToTop(hwnd);
+            return true;
+        }
+        false
+    }
+}

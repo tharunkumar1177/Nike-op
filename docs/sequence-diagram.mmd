@@ -1,0 +1,83 @@
+sequenceDiagram
+    autonumber
+    participant User
+    participant Runner as EdgeOptimizer Runner
+    participant Store as Runner SQLite state.db
+    participant WinUI as WinUI Settings client
+    participant Legacy as Legacy Rust Settings
+    participant Engine as EngineSvc (transitional)
+    participant Crosshair as Crosshair worker
+    participant Macro as Macro worker
+    participant Broker as Privileged Broker (planned)
+
+    %% Verified implementation: Runner owns startup, tray, and durable state.
+    rect rgb(240, 248, 255)
+        Note over Runner,Store: Current implementation — Runner startup and state restoration
+        Runner->>Store: Open state.db and apply schema migrations
+        Runner->>Store: Import legacy JSON only when the database is empty
+        Store-->>Runner: Profiles, active profile, and UI state snapshot
+        Runner->>Runner: Create tray icon and transitional Settings pipe
+        Note over Runner: Restoration does not activate profiles, terminate processes, or run cleanup.
+    end
+
+    %% The WinUI client is active for presentation but does not yet have a Runner transport.
+    rect rgb(255, 248, 220)
+        Note over User,WinUI: Current implementation — on-demand WinUI presentation
+        User->>Runner: Choose Open Settings or double-click tray icon
+        Runner->>Runner: Find existing Settings window
+        alt Settings window exists
+            Runner->>WinUI: Bring existing window to foreground
+        else Settings window does not exist
+            Runner->>WinUI: Start EdgeOptimizer.Settings.WinUI.exe
+            WinUI->>WinUI: Create memory-only view models
+        end
+        Note over WinUI,Runner: The current WinUI client uses DisconnectedRunnerClient and does not request state or persist edits.
+
+        User->>Runner: Single-click tray icon
+        alt Legacy Rust Settings client is connected
+            Runner->>Legacy: ShowFlyout via transitional Bincode pipe
+        else No compatible pipe client is connected
+            Runner->>WinUI: Start with --flyout-only
+            Note over WinUI: Flyout IPC and WinUI 3 flyout handling remain planned.
+        end
+    end
+
+    %% These protocols exist today but are transitional and are not the WinUI 3 contract.
+    rect rgb(255, 240, 245)
+        Note over Legacy,Engine: Current transitional orchestration path
+        Legacy->>Runner: RequestState, profile edits, or orchestration command (Bincode pipe)
+        Runner->>Store: Read snapshot or transact profile and active-state updates
+        Store-->>Runner: Snapshot or persisted result
+        Runner-->>Legacy: StateSnapshot or correlated event (Bincode pipe)
+
+        Legacy->>Runner: Activate profile or request cleanup
+        Runner->>Engine: ApplyProfile or RunCleanup (Bincode pipe)
+        Note over Engine: Default pipe security and SYSTEM scheduled-task host are transitional.
+        Engine->>Engine: Name-based process termination or cleanup
+        Engine-->>Runner: Structured operation result
+        opt Successful profile activation with overlay enabled
+            Runner->>Crosshair: Start detached overlay process with image path and offsets
+            Crosshair->>Crosshair: Render click-through, topmost layered window
+        end
+        Runner-->>Legacy: Optimization or cleanup result
+
+        Note over Legacy,Macro: Existing Macro worker communication is direct and transitional.
+        Legacy->>Macro: Private Bincode pipe
+    end
+
+    %% This section intentionally shows target behavior rather than claiming it exists.
+    rect rgb(240, 255, 240)
+        Note over WinUI,Broker: Target architecture — planned, versioned contracts
+        WinUI-->>Runner: Request snapshot and submit validated user intent (Protobuf over per-user pipe)
+        Runner-->>WinUI: Snapshot, acknowledgement, progress, or structured error
+        Runner->>Store: Own all durable profile and active-state changes
+
+        Runner-->>Crosshair: Start, update, stop, acknowledgement, and render-error messages
+        Runner-->>Macro: Configure, record, play, cancel, and worker-event messages
+        Note over Crosshair,Macro: Workers remain unprivileged and never open durable state.
+
+        Runner-->>Broker: Allowlisted machine-level operation with a versioned request
+        Broker-->>Runner: Authorized, correlated result
+        Note over Broker: SCM service verifies named-pipe peer identity and authorizes each operation.
+        Note over Runner,Broker: User-specific cleanup remains in the verified interactive-user context, not SYSTEM.
+    end

@@ -1,0 +1,162 @@
+name: Build and Test
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust logic and coverage
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: edge-optimizer
+          cache-on-failure: true
+
+      - name: Install coverage tool
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Prepare Rust artifacts
+        run: New-Item -ItemType Directory -Force -Path artifacts/rust | Out-Null
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build workspace
+        run: cargo build --workspace --all-targets --verbose
+
+      - name: Build runtime bundle binaries
+        run: cargo build --workspace --release --verbose
+
+      - name: Stage Rust runtime binaries
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/runtime | Out-Null
+          Copy-Item target/release/EdgeOptimizer_Runner.exe artifacts/runtime/
+          Copy-Item target/release/EdgeOptimizer_Crosshair.exe artifacts/runtime/
+          Copy-Item target/release/EdgeOptimizer_Macro.exe artifacts/runtime/
+          Copy-Item target/release/EdgeOptimizer_EngineSvc.exe artifacts/runtime/
+          Copy-Item target/release/EdgeOptimizer_EngineCtl.exe artifacts/runtime/
+
+      - name: Test workspace
+        run: |
+          cargo test --workspace --all-targets --verbose 2>&1 | Tee-Object -FilePath artifacts/rust/cargo-test.log
+          $testExitCode = $LASTEXITCODE
+          if ($testExitCode -ne 0) { exit $testExitCode }
+
+      - name: Collect Rust coverage
+        run: cargo llvm-cov --workspace --all-targets --lcov --output-path artifacts/rust/lcov.info
+
+      - name: Upload Rust test and coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-test-coverage
+          path: artifacts/rust
+          if-no-files-found: warn
+
+      - name: Upload Rust runtime binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: edge-optimizer-rust-runtime
+          path: artifacts/runtime
+          if-no-files-found: error
+
+  winui:
+    name: WinUI logic, XAML build, and publish
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install .NET 10 SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('apps/**/*.csproj', 'tests/**/*.csproj') }}
+          restore-keys: |
+            nuget-${{ runner.os }}-
+
+      - name: Restore .NET projects
+        run: |
+          dotnet restore tests/EdgeOptimizer.Settings.Core.Tests/EdgeOptimizer.Settings.Core.Tests.csproj
+          dotnet restore apps/EdgeOptimizer.Settings.WinUI/EdgeOptimizer.Settings.WinUI.csproj
+
+      - name: Build logic tests
+        run: dotnet build tests/EdgeOptimizer.Settings.Core.Tests/EdgeOptimizer.Settings.Core.Tests.csproj --configuration Release --no-restore
+
+      - name: Run logic tests
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts/winui | Out-Null
+          dotnet test tests/EdgeOptimizer.Settings.Core.Tests/EdgeOptimizer.Settings.Core.Tests.csproj --configuration Release --no-build --logger "trx;LogFileName=core-tests.trx" --results-directory artifacts/winui --collect "XPlat Code Coverage"
+
+      - name: Build WinUI XAML
+        run: dotnet build apps/EdgeOptimizer.Settings.WinUI/EdgeOptimizer.Settings.WinUI.csproj --configuration Release --no-restore
+
+      - name: Publish self-contained WinUI client
+        run: dotnet publish apps/EdgeOptimizer.Settings.WinUI/EdgeOptimizer.Settings.WinUI.csproj --configuration Release --no-restore --output artifacts/winui/publish
+
+      - name: Upload WinUI test, coverage, and publish artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: winui-test-coverage-publish
+          path: artifacts/winui
+          if-no-files-found: warn
+
+  bundle:
+    name: Assemble Windows application bundle
+    needs: [rust, winui]
+    runs-on: windows-latest
+
+    steps:
+      - name: Download Rust runtime
+        uses: actions/download-artifact@v4
+        with:
+          name: edge-optimizer-rust-runtime
+          path: bundle
+
+      - name: Download WinUI publish output
+        uses: actions/download-artifact@v4
+        with:
+          name: winui-test-coverage-publish
+          path: winui-artifact
+
+      - name: Add WinUI client beside Runner and workers
+        run: Copy-Item winui-artifact/publish/* bundle/ -Recurse -Force
+
+      - name: Upload runnable Windows bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: edge-optimizer-windows-x64
+          path: bundle
+          if-no-files-found: error
