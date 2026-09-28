@@ -141,7 +141,7 @@ impl EnginePipeClient {
             while start.elapsed() <= timeout {
                 let pipe_handle = CreateFileW(
                     windows::core::PCWSTR(pipe_name_wide.as_ptr()),
-                    (FILE_GENERIC_READ.0 | FILE_GENERIC_WRITE.0).into(),
+                    FILE_GENERIC_READ.0 | FILE_GENERIC_WRITE.0,
                     FILE_SHARE_NONE,
                     None,
                     OPEN_EXISTING,

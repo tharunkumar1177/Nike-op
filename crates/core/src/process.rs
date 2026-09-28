@@ -100,7 +100,7 @@ pub fn kill_processes(process_names: &[String]) -> KillReport {
         let mut killed_any = false;
         let mut failed_any = false;
 
-        for (_pid, process) in sys.processes() {
+        for process in sys.processes().values() {
             let process_name = process.name();
             let process_normalized = normalize_process_name(process_name);
 

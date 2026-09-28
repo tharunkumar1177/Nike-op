@@ -58,8 +58,8 @@ impl FlyoutWindow {
             let startup_input = GdiplusStartupInput {
                 GdiplusVersion: 1,
                 DebugEventCallback: 0,
-                SuppressBackgroundThread: FALSE.into(),
-                SuppressExternalCodecs: FALSE.into(),
+                SuppressBackgroundThread: FALSE,
+                SuppressExternalCodecs: FALSE,
             };
             let mut gdiplus_token: usize = 0;
             let mut output = GdiplusStartupOutput::default();
@@ -229,8 +229,7 @@ impl FlyoutWindow {
 
                     // Check if mouse is in the item area
                     if y >= items_start_y
-                        && x >= PADDING
-                        && x < (FLYOUT_WIDTH - PADDING)
+                        && (PADDING..(FLYOUT_WIDTH - PADDING)).contains(&x)
                         && item_index >= 0
                         && (item_index as usize) < state.profiles.len()
                     {
@@ -323,7 +322,7 @@ impl FlyoutState {
                 biHeight: -window_height, // Top-down
                 biPlanes: 1,
                 biBitCount: 32,
-                biCompression: BI_RGB.0 as u32,
+                biCompression: BI_RGB.0,
                 biSizeImage: 0,
                 biXPelsPerMeter: 0,
                 biYPelsPerMeter: 0,

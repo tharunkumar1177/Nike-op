@@ -96,7 +96,7 @@ fn connect_with_timeout(worker_pid: u32, timeout: Duration) -> Result<HANDLE> {
         let result = unsafe {
             CreateFileW(
                 windows::core::PCWSTR(pipe_name.as_ptr()),
-                (FILE_GENERIC_READ.0 | FILE_GENERIC_WRITE.0).into(),
+                FILE_GENERIC_READ.0 | FILE_GENERIC_WRITE.0,
                 FILE_SHARE_NONE,
                 None,
                 OPEN_EXISTING,
