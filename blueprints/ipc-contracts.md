@@ -19,7 +19,14 @@ Current named-pipe communication uses Rust Serde/Bincode. A bounded C# compatibi
 
 The `.proto` schema will be authoritative for wire representation. Serialized auth fields are informational only; peer identity comes from the named-pipe token and ACL.
 
-The current pipe names (`\\.\pipe\EdgeOptimizerIPC`, `EdgeOptimizerMacroIPC`, and `EdgeOptimizerEngineIPC` in `crates/core/src/ipc.rs` and `engine_ipc.rs`) are machine-global and use default security. Runner's Settings and worker pipes must become per-user, with names derived from the user's SID or logon session and a security descriptor that grants access only to that user. The broker pipe stays machine-wide and follows [Privileged broker](privileged-broker.md).
+Runner's Settings and Macro pipes are per session, with the name `\\.\pipe\<base>-<session id>` (`crates/core/src/pipe_security.rs`).
+
+- **Server side.** Each server uses a protected DACL that denies network logons and grants access only to the pipe owner and SYSTEM. It also sets `FILE_FLAG_FIRST_PIPE_INSTANCE`, so it fails instead of sharing a name another process already holds, and rejects remote clients.
+- **Client side.** Each client verifies the server's process before trusting the pipe:
+  - Runner requires the Macro pipe server's PID to equal the worker process it started.
+  - The WinUI client requires the server to be `EdgeOptimizer_Runner.exe` from its own install directory, in its own session (`RunnerPipeIdentity`).
+
+The engine pipe (`EdgeOptimizerEngineIPC`) is still machine-global with default security; it follows [Privileged broker](privileged-broker.md).
 
 Planned message families:
 
@@ -62,13 +69,15 @@ None.
 ## Relevant implementation and tests
 
 - `crates/core/src/ipc.rs` — transitional Settings/Runner pipe.
+- `crates/core/src/pipe_security.rs` — per-session names, owner-only descriptor, and server PID lookup, with unit tests.
+- `apps/EdgeOptimizer.Settings.Core/Services/RunnerPipeIdentity.cs` — C# pipe name and Runner server identity rules, tested in `RunnerPipeIdentityTests`.
 - `crates/core/src/engine_ipc.rs` — transitional Runner/Engine pipe.
 - `crates/core/src/orchestration.rs` — transitional envelope and operations.
 
 ## Acceptance or verification criteria
 
 - [ ] Generate Rust and C# bindings from one Protobuf schema.
-- [ ] Derive Runner's Settings and worker pipe names per user, and apply a security descriptor restricted to that user.
+- [x] Derive Runner's Settings and Macro pipe names per session, apply an owner-only security descriptor, refuse existing instances, and verify the server process on the client.
 - [ ] Carry capability availability and reasons from Runner to Settings.
 - [ ] Enforce protocol version and maximum frame length before decoding.
 - [ ] Reject unknown or malformed privileged operations.

@@ -31,7 +31,9 @@ WinUI 3 never owns durable state or privileged operations. It requests a snapsho
 
 WinUI never infers the edition itself. It presents each capability as available or unavailable exactly as Runner reports it, shows the reason (for example "requires Full edition"), and disables the matching controls. Planned surfaces are an app-wide **Cleanup** page owned by [Disk cleanup](disk-cleanup.md) and profile-scoped FPS Boost controls owned by [FPS Boost](fps-boost.md).
 
-For the Store edition the client is published framework-dependent on the Windows App SDK runtime package; the Full edition may stay self-contained (see [Packaging and distribution](packaging-and-distribution.md)). The legacy Iced settings executable in `crates/settings` and its `crates/core/src/gui` implementation are superseded by this client and are scheduled for deletion.
+For the Store edition the client is published framework-dependent on the Windows App SDK runtime package; the Full edition may stay self-contained (see [Packaging and distribution](packaging-and-distribution.md)). The legacy Iced settings executable and its `crates/core/src/gui` implementation have been deleted.
+
+The client connects to Runner's per-session pipe, whose name comes from `RunnerPipeIdentity`. Before sending anything, it confirms through `GetNamedPipeServerProcessId` that the server is `EdgeOptimizer_Runner.exe` in its own install directory and session, and it disconnects otherwise.
 
 Starting a new Settings process is a Runner process-launch operation and does
 not require named-pipe IPC. Once Settings is connected, Runner uses the named
@@ -61,6 +63,7 @@ existing window. Runner never uses WinUI `DispatcherQueue`.
 
 - `apps/EdgeOptimizer.Settings.Core` — UI-independent models, contracts, and view-model logic.
 - `apps/EdgeOptimizer.Settings.WinUI` — active WinUI presentation client.
+- `apps/EdgeOptimizer.Settings.Core/Services/RunnerPipeIdentity.cs` and `tests/EdgeOptimizer.Settings.Core.Tests/RunnerPipeIdentityTests.cs` — pipe naming and Runner identity rules.
 - `crates/runner/src/main.rs` — launches the packaged WinUI client.
 
 ## Acceptance or verification criteria
@@ -82,7 +85,8 @@ existing window. Runner never uses WinUI `DispatcherQueue`.
 - [x] Include WinUI 3 build and logic tests in CI.
 - [ ] Present Runner-reported capability availability and reasons, and disable unavailable controls.
 - [ ] Publish framework-dependent on the Windows App SDK runtime for the Store edition.
-- [ ] Delete the legacy Iced settings executable and `crates/core/src/gui` once no remaining code depends on them.
+- [x] Delete the legacy Iced settings executable and `crates/core/src/gui`.
+- [x] Connect only to Runner's per-session pipe, and verify that the server is the sibling Runner before sending messages.
 
 ## Remaining gaps and unknowns
 

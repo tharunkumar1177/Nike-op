@@ -4,9 +4,7 @@
 
 use crate::MacroAppState;
 use anyhow::Result;
-use edge_optimizer_core::ipc::MACRO_PIPE_NAME;
 use edge_optimizer_core::ipc::RunnerToMacroCommand;
-use std::ptr::null_mut;
 use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, warn};
 
@@ -29,25 +27,32 @@ pub enum MacroToSettings {
 pub fn run_ipc_listener(state: Arc<Mutex<MacroAppState>>) -> Result<()> {
     info!("Starting Macro IPC listener...");
 
-    loop {
-        // Create named pipe server
-        let pipe_name: Vec<u16> = MACRO_PIPE_NAME.encode_utf16().chain(Some(0)).collect();
+    let pipe_path = edge_optimizer_core::ipc::macro_pipe_name()?;
+    let pipe_name: Vec<u16> = pipe_path.encode_utf16().chain(Some(0)).collect();
+    let security = edge_optimizer_core::pipe_security::owner_only_attributes()?;
 
+    loop {
+        // First-instance creation fails while another process holds the name,
+        // and Runner verifies this worker's PID before sending configuration.
         let pipe_handle = unsafe {
             CreateNamedPipeW(
                 windows::core::PCWSTR(pipe_name.as_ptr()),
-                PIPE_ACCESS_DUPLEX,
-                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
-                1,                // Max instances
-                8192,             // Out buffer size
-                8192,             // In buffer size
-                0,                // Default timeout
-                Some(null_mut()), // Default security
+                PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                1,
+                8192,
+                8192,
+                0,
+                Some(&security as *const _),
             )
         };
 
         if pipe_handle.is_invalid() {
-            error!("Failed to create macro named pipe");
+            error!(
+                "Failed to create {}: {}",
+                pipe_path,
+                windows::core::Error::from_win32()
+            );
             std::thread::sleep(std::time::Duration::from_secs(1));
             continue;
         }
@@ -56,7 +61,7 @@ pub fn run_ipc_listener(state: Arc<Mutex<MacroAppState>>) -> Result<()> {
 
         // Wait for Settings to connect
         unsafe {
-            match ConnectNamedPipe(pipe_handle, Some(null_mut())) {
+            match ConnectNamedPipe(pipe_handle, None) {
                 Ok(_) => {
                     info!("Runner connected to Macro pipe");
                 }

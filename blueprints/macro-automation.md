@@ -52,7 +52,7 @@ Malformed actions, shortcut conflicts, worker failure, or cancellation must fail
 
 - `crates/core/src/macro_config.rs` — Rust action, shortcut, repeat, validation, and configuration types with unit tests.
 - `crates/core/src/input_recorder.rs` — transitional Windows keyboard recording implementation.
-- `crates/core/src/gui/macro_editor.rs` — transitional Iced macro editor, scheduled for deletion with the Iced settings client. `input_recorder.rs` is kept for worker-side recording.
+- `crates/core/src/macro_worker.rs` and `crates/macro/src/ipc_handler.rs` — per-session owner-only Macro pipe. Runner verifies that the pipe server is the worker it started.
 - `crates/macro/src` — standalone worker, hotkey listener, input hooks/senders, executor, and private IPC implementation.
 - `apps/EdgeOptimizer.Settings.Core/ViewModels/MacrosViewModel.cs` — profile-scoped macro collection and sequence editing.
 - `crates/core/src/macro_worker.rs` — transitional Runner-owned worker startup and configuration.

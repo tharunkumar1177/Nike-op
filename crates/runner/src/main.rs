@@ -2,7 +2,7 @@
 //!
 //! Responsibilities:
 //! - Own tray icon/menu and user interaction loop
-//! - Forward optimization/cleanup intents from Settings to Engine service
+//! - Run user-context cleanup and forward machine-level intents to the Engine service
 //! - Relay engine state/results back to Settings
 //! - Keep Settings process optional/on-demand
 
@@ -13,15 +13,17 @@ use edge_optimizer_core::{
     config,
     crosshair_overlay::{self, OverlayHandle},
     engine_ipc::EnginePipeClient,
+    install_layout::{self, SETTINGS_EXE},
     ipc::{GuiToTray, NamedPipeServer, ProcessSnapshotEntry, TrayToGui},
     macro_worker::MacroWorkerHandle,
     orchestration::{
         AuthContext, CleanupKind, EngineState, EngineToRunnerEvent, Envelope, IdempotencyCache,
-        OperationResult, RunnerToEngineCommand, RunnerToSettingsEvent, SettingsToRunnerCommand,
+        RunnerToEngineCommand, RunnerToSettingsEvent, SettingsToRunnerCommand,
     },
     profile::Profile,
     state_store::StateStore,
     tray_icon::TrayIconManager,
+    user_cleanup,
 };
 use std::process::Command;
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -460,21 +462,6 @@ fn process_orchestration_command(
         }
         SettingsToRunnerCommand::RequestCleanup { cleanup_kind } => {
             let event = request_cleanup(env.request_id, cleanup_kind);
-            if matches!(event, RunnerToSettingsEvent::CleanupResult(ref r) if r.success) {
-                set_engine_state(
-                    pipe_server,
-                    settings_connected,
-                    engine_state,
-                    EngineState::Ready,
-                );
-            } else {
-                set_engine_state(
-                    pipe_server,
-                    settings_connected,
-                    engine_state,
-                    EngineState::Degraded,
-                );
-            }
             send_runner_event(pipe_server, settings_connected, event);
         }
         SettingsToRunnerCommand::PreviewImpact { profile } => {
@@ -585,28 +572,10 @@ fn optimize_profile(
     RunnerToSettingsEvent::OptimizationResult(result)
 }
 
+/// User-specific cleanup runs here, in the signed-in user's context, and never
+/// reaches the privileged engine.
 fn request_cleanup(request_id: String, cleanup_kind: CleanupKind) -> RunnerToSettingsEvent {
-    let command = RunnerToEngineCommand::RunCleanup {
-        cleanup_kind: cleanup_kind.clone(),
-    };
-
-    match call_engine(&request_id, command) {
-        Ok(EngineToRunnerEvent::Result(result)) => RunnerToSettingsEvent::CleanupResult(result),
-        Ok(EngineToRunnerEvent::Error { message, .. }) => {
-            RunnerToSettingsEvent::CleanupResult(OperationResult::error(
-                request_id,
-                format!("cleanup failed ({}): {}", cleanup_kind.as_str(), message),
-            ))
-        }
-        Ok(other) => RunnerToSettingsEvent::CleanupResult(OperationResult::error(
-            request_id,
-            format!("unexpected engine response: {:?}", other),
-        )),
-        Err(e) => RunnerToSettingsEvent::CleanupResult(OperationResult::error(
-            request_id,
-            format!("engine unavailable: {}", e),
-        )),
-    }
+    RunnerToSettingsEvent::CleanupResult(user_cleanup::run_cleanup(request_id, cleanup_kind))
 }
 
 fn call_engine(request_id: &str, command: RunnerToEngineCommand) -> Result<EngineToRunnerEvent> {
@@ -669,18 +638,7 @@ fn spawn_settings_window(flag: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    let exe_dir = std::env::current_exe()?
-        .parent()
-        .context("failed to get executable directory")?
-        .to_path_buf();
-
-    let target = exe_dir.join("EdgeOptimizer.Settings.WinUI.exe");
-    if !target.exists() {
-        anyhow::bail!(
-            "WinUI Settings executable not found at {:?}. Publish apps/EdgeOptimizer.Settings.WinUI beside the Runner executable.",
-            target
-        );
-    }
+    let target = install_layout::sibling_executable(SETTINGS_EXE)?;
 
     let mut cmd = Command::new(&target);
     if let Some(f) = flag {

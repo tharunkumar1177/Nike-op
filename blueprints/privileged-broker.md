@@ -13,9 +13,9 @@ Code inspection on 2026-09-28:
 - `crates/engine_service/src/main.rs` runs as a console process with no Service Control Manager integration.
 - `scripts/install-engine-service.ps1` registers that process as a SYSTEM scheduled task.
 - `crates/core/src/engine_ipc.rs` creates the pipe with default security.
-- The engine supports name-based process termination, Recycle Bin cleanup, and browser-cache cleanup. Its browser-cache paths come from the SYSTEM environment.
+- The engine supports only name-based process termination, plus ping and capability discovery. Recycle Bin and browser-cache cleanup were removed from the engine protocol and now run in Runner (`crates/core/src/user_cleanup.rs`).
 - `AuthContext` values are claims only.
-- `crates/engine_ctl` and `scripts/register-cleanup-task.ps1` provide a transitional scheduled cleanup path into this engine.
+- `crates/engine_ctl` and `scripts/register-cleanup-task.ps1` have been deleted.
 
 ## Architecture dependencies
 
@@ -48,7 +48,7 @@ Each request is then authorized against the operation allowlist. The broker neve
 - priority changes for validated processes outside the caller's session; and
 - a standby memory list purge.
 
-Recycle Bin and browser-cache cleanup move out of the broker into Runner.
+Recycle Bin and browser-cache cleanup already run in Runner and are not part of the engine protocol.
 
 ### Reversible system changes
 
@@ -56,7 +56,7 @@ The broker keeps its machine journal under `%ProgramData%`, with an ACL that all
 
 ### Distribution editions and install layout
 
-The WiX installer registers the service, its recovery actions, and its security descriptor, and removes all three on uninstall. The scheduled-task installer and `engine_ctl` are retired once the service host exists.
+The WiX installer registers the service, its recovery actions, and its security descriptor, and removes all three on uninstall. The scheduled-task installer is retired once the service host exists.
 
 ### Process safety
 
@@ -85,7 +85,6 @@ The service reports readiness through the Service Control Manager, uses SCM reco
 - `crates/engine_service/src/main.rs` — transitional privileged worker.
 - `crates/core/src/engine_ipc.rs` — transitional pipe.
 - `crates/core/src/engine_commands.rs` — injectable command dispatch with fake-operation tests.
-- `crates/engine_ctl/src/main.rs` — transitional control client, to be removed.
 - `scripts/install-engine-service.ps1` — scheduled-task installer to replace.
 - `scripts/uninstall-engine-service.ps1` — scheduled-task removal to replace.
 
@@ -94,10 +93,11 @@ The service reports readiness through the Service Control Manager, uses SCM reco
 - [ ] Install and run under the Windows Service Control Manager from the Full edition installer.
 - [ ] Apply an explicit pipe ACL and verify the connecting token and that the client image is the installed Runner.
 - [ ] Enforce the named-operation allowlist and per-operation authorization; reject everything else.
-- [ ] Move user-specific cleanup to Runner in the verified interactive-user context.
+- [x] Move user-specific cleanup to Runner in the interactive-user context and remove it from the engine protocol.
 - [ ] Journal machine-level reversible changes and revert outstanding entries on service start.
 - [ ] Support service recovery, controlled shutdown, and Event Log operational logging.
-- [ ] Remove the scheduled-task installer, `engine_ctl`, and `register-cleanup-task.ps1`.
+- [x] Remove `engine_ctl` and `register-cleanup-task.ps1`.
+- [ ] Remove the scheduled-task installer once the service host exists.
 - [ ] Integration tests cover standard-user access, unauthorized clients, malformed frames, and service restart, in isolated Windows environments only.
 
 ## Remaining gaps and unknowns

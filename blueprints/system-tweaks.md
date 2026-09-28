@@ -17,7 +17,7 @@ Code inspection on 2026-09-05 confirmed:
 
 The WinUI page provides profile-scoped process selection, filtering, fan and cleanup toggles, selection totals, and restore-default behavior, with unit tests.
 
-WinUI saves supported profile fields through Runner and requests a live read-only process snapshot. The per-profile cleanup toggles and run commands in `SystemTweaksViewModel` are transitional. Their controls stay disabled because the transitional EngineSvc would run them in its SYSTEM environment, and they are superseded by the app-wide [Disk cleanup](disk-cleanup.md) page. `fan_speed_max` is stored but not applied by Engine command dispatch. PID-level safety validation is not implemented.
+WinUI saves supported profile fields through Runner and requests a live read-only process snapshot. The per-profile cleanup toggles and run commands in `SystemTweaksViewModel` are transitional. Runner now executes cleanup requests in the user's context rather than in EngineSvc, but the controls stay disabled because the app-wide [Disk cleanup](disk-cleanup.md) page supersedes them. `fan_speed_max` is stored but not applied by Engine command dispatch. PID-level safety validation is not implemented.
 
 ## Architecture dependencies
 

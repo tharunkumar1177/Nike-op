@@ -179,11 +179,12 @@ pub enum RunnerToSettingsEvent {
     Ack { message: String },
 }
 
+/// Runner-to-engine commands. User-specific cleanup is deliberately absent:
+/// Runner performs it in the interactive user's context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RunnerToEngineCommand {
     ApplyProfile { profile: Profile },
     KillProcesses { processes: Vec<String> },
-    RunCleanup { cleanup_kind: CleanupKind },
     GetCapabilities,
     Ping,
 }
@@ -203,7 +204,6 @@ pub enum EngineToRunnerEvent {
         message: String,
     },
     Capabilities {
-        cleanup_kinds: Vec<CleanupKind>,
         supports_process_kill: bool,
     },
     Pong,
@@ -274,16 +274,14 @@ mod tests {
     #[test]
     fn transitional_bincode_command_round_trips() {
         // Verifies the current Rust-only wire representation remains deterministic during migration.
-        let command = RunnerToEngineCommand::RunCleanup {
-            cleanup_kind: CleanupKind::RecycleBin,
+        let command = RunnerToEngineCommand::KillProcesses {
+            processes: vec!["fixture.exe".into()],
         };
         let encoded = bincode::serialize(&command).unwrap();
         let decoded: RunnerToEngineCommand = bincode::deserialize(&encoded).unwrap();
         assert!(matches!(
             decoded,
-            RunnerToEngineCommand::RunCleanup {
-                cleanup_kind: CleanupKind::RecycleBin
-            }
+            RunnerToEngineCommand::KillProcesses { processes } if processes == ["fixture.exe"]
         ));
     }
 

@@ -1,8 +1,11 @@
+using System.Diagnostics;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
 using System.Text;
 using EdgeOptimizer.Settings.Core.Models;
 using EdgeOptimizer.Settings.Core.Services;
 using Microsoft.UI.Dispatching;
+using Microsoft.Win32.SafeHandles;
 
 namespace EdgeOptimizer.Settings.WinUI.Services;
 
@@ -12,7 +15,6 @@ namespace EdgeOptimizer.Settings.WinUI.Services;
 /// </summary>
 public sealed class TransitionalBincodeRunnerClient : IRunnerClient, IAsyncDisposable
 {
-    private const string PipeName = "EdgeOptimizerIPC";
     private const int MaximumMessageBytes = 1024 * 1024;
     private readonly DispatcherQueue _dispatcher;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
@@ -33,9 +35,21 @@ public sealed class TransitionalBincodeRunnerClient : IRunnerClient, IAsyncDispo
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         if (IsConnected) return;
-        _pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-        await _pipe.ConnectAsync(3000, cancellationToken);
-        _pipe.ReadMode = PipeTransmissionMode.Message;
+        int sessionId;
+        using (var current = Process.GetCurrentProcess()) sessionId = current.SessionId;
+        var pipe = new NamedPipeClientStream(".", RunnerPipeIdentity.PipeName(sessionId), PipeDirection.InOut, PipeOptions.Asynchronous);
+        try
+        {
+            await pipe.ConnectAsync(3000, cancellationToken);
+            VerifyRunnerServer(pipe, sessionId);
+            pipe.ReadMode = PipeTransmissionMode.Message;
+        }
+        catch
+        {
+            await pipe.DisposeAsync();
+            throw;
+        }
+        _pipe = pipe;
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         Post(() => ConnectionChanged?.Invoke(this, true));
         _ = ReadLoopAsync(_lifetime.Token);
@@ -223,6 +237,24 @@ public sealed class TransitionalBincodeRunnerClient : IRunnerClient, IAsyncDispo
     {
         if (!_dispatcher.TryEnqueue(() => action())) action();
     }
+
+    /// <summary>
+    /// Refuses a pipe that another process created under Runner's name before Runner started.
+    /// </summary>
+    private static void VerifyRunnerServer(NamedPipeClientStream pipe, int sessionId)
+    {
+        if (!GetNamedPipeServerProcessId(pipe.SafePipeHandle, out var serverProcessId))
+            throw new IOException($"Cannot identify the Runner pipe server (Win32 error {Marshal.GetLastPInvokeError()}).");
+
+        using var server = Process.GetProcessById(checked((int)serverProcessId));
+        var serverImage = server.MainModule?.FileName;
+        if (!RunnerPipeIdentity.IsExpectedRunner(serverImage, server.SessionId, AppContext.BaseDirectory, sessionId))
+            throw new UnauthorizedAccessException("The Runner pipe is served by an unexpected process.");
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetNamedPipeServerProcessId(SafePipeHandle pipe, out uint serverProcessId);
 
     public async ValueTask DisposeAsync()
     {

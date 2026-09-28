@@ -1,12 +1,10 @@
 [workspace]
 members = [
     "crates/core",
-    "crates/settings",
     "crates/runner",
     "crates/crosshair",
     "crates/macro",
     "crates/engine_service",
-    "crates/engine_ctl",
 ]
 resolver = "2"
 
@@ -15,15 +13,13 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace.dependencies]
-# GUI & Window Management
-iced = { version = "0.12", features = ["image"] }
+# Window Management
 tray-icon = "0.14"
 winit = "0.29"
 softbuffer = "0.4"
 
-# Image & File Handling
+# Image Handling
 image = "0.24"
-rfd = "0.14"
 
 # System & Process Management
 sysinfo = "0.30"
@@ -67,7 +63,9 @@ features = [
     "Win32_System_LibraryLoader",
     "Win32_Storage_FileSystem",
     "Win32_System_Pipes",
+    "Win32_System_RemoteDesktop",
     "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_HiDpi",
     "Win32_UI_Shell",

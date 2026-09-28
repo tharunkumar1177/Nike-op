@@ -1,25 +1,35 @@
+//! Inter-Process Communication between Settings and Runner processes
+//! Uses Windows Named Pipes for cross-process communication
+
 use crate::macro_config::MacroConfig;
 use crate::orchestration::{Envelope, RunnerToSettingsEvent, SettingsToRunnerCommand};
-/// Inter-Process Communication between Settings and Runner processes
-/// Uses Windows Named Pipes for cross-process communication
+use crate::pipe_security;
 use crate::profile::Profile;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::ptr::null_mut;
+#[cfg(windows)]
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 #[cfg(windows)]
 use windows::Win32::{Foundation::*, Storage::FileSystem::*, System::Pipes::*};
 
-/// Named pipe path for IPC (Settings <-> Runner)
-#[allow(dead_code)]
-pub const PIPE_NAME: &str = r"\\.\pipe\EdgeOptimizerIPC";
+/// Base name of the Settings <-> Runner pipe; the full path is per session.
+/// `EdgeOptimizer.Settings.WinUI` derives the same name.
+pub const SETTINGS_PIPE_BASE: &str = "EdgeOptimizerIPC";
 const MAX_SETTINGS_MESSAGE_BYTES: usize = 1024 * 1024;
 
-/// Named pipe path for Macro IPC (Settings <-> Macro)
-#[allow(dead_code)]
-pub const MACRO_PIPE_NAME: &str = r"\\.\pipe\EdgeOptimizerMacroIPC";
+/// Base name of the Runner <-> Macro worker pipe; the full path is per session.
+pub const MACRO_PIPE_BASE: &str = "EdgeOptimizerMacroIPC";
+
+/// Settings <-> Runner pipe path for the caller's session.
+pub fn settings_pipe_name() -> Result<String> {
+    pipe_security::current_session_pipe_name(SETTINGS_PIPE_BASE)
+}
+
+/// Runner <-> Macro worker pipe path for the caller's session.
+pub fn macro_pipe_name() -> Result<String> {
+    pipe_security::current_session_pipe_name(MACRO_PIPE_BASE)
+}
 
 /// Messages from Settings to Runner
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,29 +100,39 @@ pub struct NamedPipeServer {
 #[cfg(windows)]
 #[allow(dead_code)]
 impl NamedPipeServer {
-    /// Create a new named pipe server (Runner side)
+    /// Create the session's Settings pipe server (Runner side).
+    ///
+    /// Fails if any process already owns the pipe name, so Runner never shares
+    /// an instance with a squatter.
     pub fn new() -> Result<Self> {
-        use std::ptr::null_mut;
-
-        let pipe_name: Vec<u16> = PIPE_NAME.encode_utf16().chain(Some(0)).collect();
+        let pipe_path = settings_pipe_name()?;
+        let pipe_name: Vec<u16> = pipe_path.encode_utf16().chain(Some(0)).collect();
+        let security = pipe_security::owner_only_attributes()?;
 
         unsafe {
             let pipe_handle = CreateNamedPipeW(
                 windows::core::PCWSTR(pipe_name.as_ptr()),
-                PIPE_ACCESS_DUPLEX,
-                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_NOWAIT,
-                1,                // Max instances
-                8192,             // Out buffer size
-                8192,             // In buffer size
-                0,                // Default timeout
-                Some(null_mut()), // Default security
+                PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                PIPE_TYPE_MESSAGE
+                    | PIPE_READMODE_MESSAGE
+                    | PIPE_NOWAIT
+                    | PIPE_REJECT_REMOTE_CLIENTS,
+                1,
+                8192,
+                8192,
+                0,
+                Some(&security as *const _),
             );
 
             if pipe_handle.is_invalid() {
-                anyhow::bail!("Failed to create named pipe");
+                anyhow::bail!(
+                    "Failed to create {}: {}",
+                    pipe_path,
+                    windows::core::Error::from_win32()
+                );
             }
 
-            tracing::info!("Named pipe server created: {}", PIPE_NAME);
+            tracing::info!("Named pipe server created: {}", pipe_path);
 
             Ok(Self {
                 pipe_handle,
@@ -225,177 +245,6 @@ impl Drop for NamedPipeServer {
         }
         tracing::info!("Named pipe server closed");
     }
-}
-
-/// Named Pipe Client (Settings side)
-/// Connects to Runner and exchanges messages
-#[cfg(windows)]
-#[allow(dead_code)]
-#[derive(Debug)]
-pub struct NamedPipeClient {
-    pipe_handle: HANDLE,
-}
-
-#[cfg(windows)]
-#[allow(dead_code)]
-impl NamedPipeClient {
-    /// Connect to the named pipe server (Runner) with exponential backoff
-    pub fn connect() -> Result<Self> {
-        Self::connect_with_timeout(Duration::from_secs(3))
-    }
-
-    /// Connect to the named pipe server with custom timeout
-    pub fn connect_with_timeout(timeout: Duration) -> Result<Self> {
-        let pipe_name: Vec<u16> = PIPE_NAME.encode_utf16().chain(Some(0)).collect();
-        let start = std::time::Instant::now();
-        let mut attempt = 0u32;
-
-        unsafe {
-            // Try to connect with exponential backoff
-            while start.elapsed() < timeout {
-                attempt += 1;
-                let pipe_handle = CreateFileW(
-                    windows::core::PCWSTR(pipe_name.as_ptr()),
-                    (FILE_GENERIC_READ.0 | FILE_GENERIC_WRITE.0).into(),
-                    FILE_SHARE_NONE,
-                    None,
-                    OPEN_EXISTING,
-                    FILE_ATTRIBUTE_NORMAL,
-                    HANDLE::default(),
-                );
-
-                let pipe_handle = match pipe_handle {
-                    Ok(h) => h,
-                    Err(_) => {
-                        // Exponential backoff: 50ms, 100ms, 200ms, ... capped at 500ms
-                        let delay = Duration::from_millis((50 * (1 << attempt.min(4))) as u64);
-                        std::thread::sleep(delay);
-                        continue;
-                    }
-                };
-
-                if !pipe_handle.is_invalid() {
-                    tracing::info!(
-                        "Connected to named pipe: {} (attempt {})",
-                        PIPE_NAME,
-                        attempt
-                    );
-                    return Ok(Self { pipe_handle });
-                }
-
-                // Exponential backoff
-                let delay = Duration::from_millis((50 * (1 << attempt.min(4))) as u64);
-                std::thread::sleep(delay);
-            }
-
-            anyhow::bail!("Failed to connect to named pipe after {:?}", timeout);
-        }
-    }
-
-    /// Try to connect without blocking (single attempt)
-    pub fn try_connect() -> Result<Option<Self>> {
-        let pipe_name: Vec<u16> = PIPE_NAME.encode_utf16().chain(Some(0)).collect();
-
-        unsafe {
-            let pipe_handle = CreateFileW(
-                windows::core::PCWSTR(pipe_name.as_ptr()),
-                (FILE_GENERIC_READ.0 | FILE_GENERIC_WRITE.0).into(),
-                FILE_SHARE_NONE,
-                None,
-                OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL,
-                HANDLE::default(),
-            );
-
-            match pipe_handle {
-                Ok(h) if !h.is_invalid() => {
-                    tracing::info!("Connected to named pipe: {}", PIPE_NAME);
-                    Ok(Some(Self { pipe_handle: h }))
-                }
-                _ => Ok(None), // Not available yet
-            }
-        }
-    }
-
-    /// Send a message to Runner
-    pub fn send(&self, message: &GuiToTray) -> Result<()> {
-        let data = bincode::serialize(message).context("Failed to serialize GuiToTray message")?;
-
-        let mut bytes_written = 0u32;
-
-        unsafe {
-            WriteFile(
-                self.pipe_handle,
-                Some(&data),
-                Some(&mut bytes_written),
-                None,
-            )
-            .context("WriteFile failed")?;
-
-            let _ = FlushFileBuffers(self.pipe_handle);
-        }
-
-        Ok(())
-    }
-
-    /// Try to receive a message (non-blocking)
-    pub fn try_recv(&self) -> Result<Option<TrayToGui>> {
-        let mut buffer = vec![0u8; MAX_SETTINGS_MESSAGE_BYTES];
-        let mut bytes_read = 0u32;
-
-        unsafe {
-            match ReadFile(
-                self.pipe_handle,
-                Some(&mut buffer),
-                Some(&mut bytes_read),
-                None,
-            ) {
-                Ok(_) => {
-                    if bytes_read == 0 {
-                        return Ok(None);
-                    }
-
-                    let message: TrayToGui = bincode::deserialize(&buffer[..bytes_read as usize])
-                        .context("Failed to deserialize TrayToGui message")?;
-
-                    Ok(Some(message))
-                }
-                Err(e) => {
-                    let error_code = e.code().0 as u32;
-                    if error_code == ERROR_NO_DATA.0 {
-                        return Ok(None); // No data available
-                    }
-                    Err(anyhow::anyhow!("ReadFile failed: {}", e))
-                }
-            }
-        }
-    }
-}
-
-#[cfg(windows)]
-impl Drop for NamedPipeClient {
-    fn drop(&mut self) {
-        unsafe {
-            let _ = CloseHandle(self.pipe_handle);
-        }
-        tracing::info!("Named pipe client closed");
-    }
-}
-
-// Legacy std::sync::mpsc compatibility types for non-Windows or migration
-use std::sync::mpsc::{Receiver, Sender};
-
-/// Channels held by the GUI side (legacy - will be removed)
-#[allow(dead_code)]
-pub struct GuiChannels {
-    pub to_tray: Sender<GuiToTray>,
-    pub from_tray: Receiver<TrayToGui>,
-}
-
-/// Channels held by the Tray side (legacy - will be removed)
-pub struct TrayChannels {
-    pub from_gui: Receiver<GuiToTray>,
-    pub to_gui: Sender<TrayToGui>,
 }
 
 /// Transitional Runner-to-Macro worker protocol. Runner owns this worker.

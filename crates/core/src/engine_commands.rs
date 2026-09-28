@@ -1,13 +1,10 @@
 //! Pure Engine command routing separated from Windows side effects.
 
-use crate::orchestration::{
-    CleanupKind, EngineToRunnerEvent, Envelope, OperationResult, RunnerToEngineCommand,
-};
+use crate::orchestration::{EngineToRunnerEvent, Envelope, OperationResult, RunnerToEngineCommand};
 use crate::process::KillReport;
 
 pub trait EngineOperations {
     fn kill_processes(&mut self, processes: &[String]) -> KillReport;
-    fn run_cleanup(&mut self, request_id: &str, cleanup_kind: CleanupKind) -> OperationResult;
 }
 
 pub fn dispatch_engine_command(
@@ -17,7 +14,6 @@ pub fn dispatch_engine_command(
     match &request.payload {
         RunnerToEngineCommand::Ping => EngineToRunnerEvent::Pong,
         RunnerToEngineCommand::GetCapabilities => EngineToRunnerEvent::Capabilities {
-            cleanup_kinds: vec![CleanupKind::RecycleBin, CleanupKind::BrowserCache],
             supports_process_kill: true,
         },
         RunnerToEngineCommand::KillProcesses { processes } => {
@@ -33,9 +29,6 @@ pub fn dispatch_engine_command(
             result.summary = format!("profile={} {}", profile.name, result.summary);
             EngineToRunnerEvent::Result(result)
         }
-        RunnerToEngineCommand::RunCleanup { cleanup_kind } => EngineToRunnerEvent::Result(
-            operations.run_cleanup(&request.request_id, cleanup_kind.clone()),
-        ),
     }
 }
 
@@ -48,7 +41,6 @@ mod tests {
     #[derive(Default)]
     struct FakeOperations {
         killed_inputs: Vec<Vec<String>>,
-        cleanup_inputs: Vec<CleanupKind>,
     }
 
     impl EngineOperations for FakeOperations {
@@ -59,16 +51,6 @@ mod tests {
                 failed: Vec::new(),
                 not_found: Vec::new(),
                 blocklist_skipped: Vec::new(),
-            }
-        }
-
-        fn run_cleanup(&mut self, request_id: &str, cleanup_kind: CleanupKind) -> OperationResult {
-            self.cleanup_inputs.push(cleanup_kind);
-            OperationResult {
-                request_id: request_id.to_string(),
-                success: true,
-                summary: "fake cleanup".into(),
-                ..OperationResult::default()
             }
         }
     }
@@ -92,11 +74,9 @@ mod tests {
             ),
             EngineToRunnerEvent::Capabilities {
                 supports_process_kill: true,
-                ..
             }
         ));
         assert!(operations.killed_inputs.is_empty());
-        assert!(operations.cleanup_inputs.is_empty());
     }
 
     #[test]
@@ -124,23 +104,5 @@ mod tests {
                 if result.summary.starts_with("profile=Gaming")
         ));
         assert_eq!(operations.killed_inputs, vec![names.clone(), names]);
-    }
-
-    #[test]
-    fn cleanup_intent_is_delegated_to_the_injected_fake() {
-        // Verifies cleanup routing returns the fake result without deleting any user data.
-        let mut operations = FakeOperations::default();
-        let result = dispatch_engine_command(
-            &request(RunnerToEngineCommand::RunCleanup {
-                cleanup_kind: CleanupKind::BrowserCache,
-            }),
-            &mut operations,
-        );
-        assert!(matches!(
-            result,
-            EngineToRunnerEvent::Result(result)
-                if result.success && result.request_id == "request-7"
-        ));
-        assert_eq!(operations.cleanup_inputs, vec![CleanupKind::BrowserCache]);
     }
 }

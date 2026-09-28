@@ -17,9 +17,10 @@ starts `EdgeOptimizer.Settings.WinUI.exe --flyout-only`. The WinUI client does
 not implement a separate flyout mode and activates its main window instead.
 
 The Runner-owned flyout described here is the approved target design and is
-not yet implemented. Legacy `FlyoutWindow` and `TrayFlyoutManager` code exists
-under `crates/core`, but it is not the active Runner tray path and must not be
-treated as verification of this blueprint.
+not yet implemented. Legacy `FlyoutWindow` code exists in
+`crates/core/src/flyout.rs`, but it is not the active Runner tray path and must
+not be treated as verification of this blueprint. The legacy
+`TrayFlyoutManager` has been deleted.
 
 ## Architecture dependencies
 
@@ -128,8 +129,6 @@ treated as verification of this blueprint.
   launch/`ShowFlyout` behavior.
 - `crates/core/src/flyout.rs` — legacy native flyout implementation; candidate
   reference only, not active evidence.
-- `crates/core/src/tray_flyout.rs` — legacy combined tray/flyout manager; not
-  used by the active Runner path.
 - `apps/EdgeOptimizer.Settings.WinUI/App.xaml.cs` — currently maps the
   transitional flyout command to the full Settings window.
 

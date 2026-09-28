@@ -6,19 +6,19 @@ A user chooses cleanup categories, previews how much space each would free, runs
 
 ## Current verified status
 
-**Status:** Planned
+**Status:** Partial
 
-Code inspection on 2026-09-28:
+Code inspection on 2026-09-28, after the Phase 2 runtime changes:
 
-- `crates/engine_service/src/main.rs` implements two transitional cleanup kinds inside the SYSTEM-hosted EngineSvc:
-  - Recycle Bin, by running `Clear-RecycleBin` through PowerShell.
-  - Browser cache, by recreating Chrome and Edge `Default`-profile cache folders under the service's own `%LOCALAPPDATA%`.
-- Both therefore act on the SYSTEM profile rather than the signed-in user's.
-- `scripts/register-cleanup-task.ps1` schedules `EdgeOptimizer_EngineCtl.exe cleanup <kind>` as a daily SYSTEM task. `crates/engine_ctl/src/main.rs` forwards that command to the engine pipe with an `AuthContext::ScheduledTask` claim.
-- The WinUI shell (`apps/EdgeOptimizer.Settings.WinUI/ShellPage.xaml`) has no Cleanup page.
-- `SystemTweaksViewModel` holds per-profile Recycle Bin and browser-cache toggles and run commands. Those toggles do not exist in the Rust profile contract, and [System Tweaks](system-tweaks.md) keeps the controls disabled.
+- Runner now runs the two existing cleanup kinds itself, through `crates/core/src/user_cleanup.rs`, in the signed-in user's context:
+  - **Recycle Bin:** emptied through `SHEmptyRecycleBinW`. An already-empty bin is reported as success.
+  - **Browser cache:** the contents of the Chrome and Edge `Default`-profile cache folders under the user's `%LOCALAPPDATA%` are removed. Links are not followed, and entries that are in use are counted as skipped.
+- The engine protocol no longer carries a cleanup command.
+- `crates/engine_ctl` and `scripts/register-cleanup-task.ps1` have been deleted, so no SYSTEM scheduled cleanup path remains.
+- Unit tests cover confinement of cache paths to the given root, clearing folder contents while keeping the folders, and skipping a locked fixture file.
+- The WinUI shell (`apps/EdgeOptimizer.Settings.WinUI/ShellPage.xaml`) still has no Cleanup page. `SystemTweaksViewModel` still holds the transitional per-profile cleanup toggles, which do not exist in the Rust profile contract.
 
-No schedule is stored, and no size preview or cleanup history exists.
+No schedule is stored, and no size preview, cleanup history, or other categories exist.
 
 ## Architecture dependencies
 
@@ -103,14 +103,14 @@ A failure in one category never stops the others and is never reported as overal
 
 ## Relevant implementation and tests
 
-- `crates/engine_service/src/main.rs` — transitional SYSTEM-context Recycle Bin and browser-cache cleanup, to be replaced.
+- `crates/core/src/user_cleanup.rs` — Runner-side Recycle Bin and browser-cache cleanup with fixture-based unit tests.
+- `crates/runner/src/main.rs` — routes `RequestCleanup` to user-context cleanup.
 - `crates/core/src/orchestration.rs` — transitional `CleanupKind` and result types.
-- `crates/core/src/engine_commands.rs` — injectable cleanup routing with fake-operation tests.
-- `crates/engine_ctl/src/main.rs` and `scripts/register-cleanup-task.ps1` — transitional scheduled cleanup path, to be removed.
 - `apps/EdgeOptimizer.Settings.Core/ViewModels/SystemTweaksViewModel.cs` — transitional per-profile cleanup toggles.
 
 ## Acceptance or verification criteria
 
+- [x] Run the existing Recycle Bin and browser-cache kinds in Runner for the signed-in user, not in the SYSTEM engine.
 - [ ] Resolve every interactive-user category for the signed-in user inside Runner; never from a SYSTEM environment.
 - [ ] Send machine-level categories to the broker only as allowlisted identifiers, and report them as unavailable in the Store edition.
 - [ ] Preview estimated bytes and item counts per category without deleting anything.
@@ -119,7 +119,8 @@ A failure in one category never stops the others and is never reported as overal
 - [ ] Run a due occurrence once and a missed occurrence once after sign-in, with a notification.
 - [ ] Return per-category deleted, skipped, failed, and unavailable results for both immediate and scheduled runs.
 - [ ] Provide a WinUI Cleanup page with category selection, weekday and time schedule, preview, **Run now**, and history.
-- [ ] Remove `engine_ctl`, `register-cleanup-task.ps1`, and the transitional per-profile cleanup toggles.
+- [x] Remove `engine_ctl` and `register-cleanup-task.ps1`.
+- [ ] Remove the transitional per-profile cleanup toggles.
 - [ ] Unit-test path resolution, root confinement, schedule calculation (including daylight-saving transitions and missed runs), and result aggregation with fake filesystems and clocks.
 - [ ] Verify real deletion only in isolated Windows integration environments, never on hosted CI or a developer machine.
 
@@ -128,3 +129,5 @@ A failure in one category never stops the others and is never reported as overal
 - The exact per-vendor shader cache folders and per-browser cache folder names must be confirmed against current browser and driver releases before implementation.
 - Thumbnail and icon caches are usually held open by Explorer, so most runs will report them as skipped. Whether to offer an Explorer restart is undecided.
 - Whether Windows Update cache cleanup should wait while an update download is in progress needs evaluation.
+- Whether deleting existing files under the real `%LOCALAPPDATA%` from inside the Store MSIX affects the real files or only the package-private view is unverified, and must be tested before browser-cache cleanup is enabled in the Store edition.
+- Real Recycle Bin and browser-cache deletion has not been exercised; only fixture-based tests exist.

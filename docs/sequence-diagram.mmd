@@ -51,12 +51,15 @@ sequenceDiagram
         Runner-->>Legacy: StateSnapshot or correlated event (Bincode pipe)
 
         Legacy->>Runner: Activate profile or request cleanup
-        Runner->>Engine: ApplyProfile or RunCleanup (Bincode pipe)
+        opt Cleanup request
+            Runner->>Runner: Recycle Bin or browser-cache cleanup in the signed-in user's context
+        end
+        Runner->>Engine: ApplyProfile (Bincode pipe)
         Note over Engine: Default pipe security and SYSTEM scheduled-task host are transitional.
-        Engine->>Engine: Name-based process termination or cleanup
+        Engine->>Engine: Name-based process termination
         Engine-->>Runner: Structured operation result
         opt Successful profile activation with overlay enabled
-            Runner->>Crosshair: Start detached overlay process with image path and offsets
+            Runner->>Crosshair: Start Runner-owned overlay process with image path and offsets
             Crosshair->>Crosshair: Render click-through, topmost layered window
         end
         Runner-->>Legacy: Optimization or cleanup result

@@ -25,7 +25,7 @@ WinUI now hydrates and saves the profile's crosshair path, enablement, and offse
 
 Settings edits and previews are presentation concerns. Runner owns the active overlay lifecycle and starts or stops the unprivileged Crosshair worker; neither Settings nor the worker opens durable state.
 
-The current launcher in `crates/core/src/crosshair_overlay.rs` searches the current directory and other fallback paths, and stops the worker with `taskkill /F /IM EdgeOptimizer_Crosshair.exe`, which ends every instance on the machine. The worker must be resolved only beside Runner's image, as [Packaging and distribution](packaging-and-distribution.md) requires, and stopped through the process handle Runner owns.
+`crates/core/src/crosshair_overlay.rs` resolves the worker only beside Runner's image, through `install_layout`, as [Packaging and distribution](packaging-and-distribution.md) requires. The returned `OverlayHandle` owns the child process: Runner stops exactly that instance, and dropping the handle also stops it, so no other user's or session's overlay is affected.
 
 ### State ownership and persistence
 
@@ -65,7 +65,7 @@ A missing or invalid image, worker disconnect, or render failure must surface as
 ## Acceptance or verification criteria
 
 - [x] Represent enabled state, image reference, and X/Y offsets per Rust profile.
-- [ ] Resolve the worker only beside Runner's image and stop it through Runner's owned process handle.
+- [x] Resolve the worker only beside Runner's image and stop it through Runner's owned process handle.
 - [x] Reject missing, undecodable, or incorrectly sized images in the current Rust image-selection validation path.
 - [ ] Repeat asset validation at the Runner/worker boundary before overlay use.
 - [x] Preserve independent WinUI 3 crosshair preview state when switching profiles.

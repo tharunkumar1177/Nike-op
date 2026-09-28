@@ -1,25 +1,7 @@
-/// Windows native file dialog for image selection
+//! Crosshair image validation. File selection happens in the WinUI client.
 use anyhow::{anyhow, Result};
 use image::GenericImageView;
 use std::path::PathBuf;
-
-/// Open Windows file dialog to select a PNG file
-#[cfg(windows)]
-pub fn open_image_picker() -> Result<PathBuf> {
-    use rfd::FileDialog;
-
-    let file = FileDialog::new()
-        .add_filter("PNG Image", &["png"])
-        .add_filter("All Files", &["*"])
-        .pick_file();
-
-    file.ok_or_else(|| anyhow!("No file selected"))
-}
-
-#[cfg(not(windows))]
-pub fn open_image_picker() -> Result<PathBuf> {
-    Err(anyhow!("File picker only supported on Windows"))
-}
 
 /// Validate that the selected image is 100x100 pixels
 pub fn validate_crosshair_image(path: &PathBuf) -> Result<()> {

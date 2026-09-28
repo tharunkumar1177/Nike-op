@@ -1,9 +1,13 @@
-use crate::ipc::{RunnerToMacroCommand, MACRO_PIPE_NAME};
+use crate::ipc::RunnerToMacroCommand;
 use crate::macro_config::MacroConfig;
 use anyhow::{Context, Result};
-use std::process::{Child, Command};
+use std::process::Child;
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+use crate::install_layout::{self, MACRO_EXE};
+#[cfg(windows)]
+use std::process::Command;
 #[cfg(windows)]
 use windows::Win32::{Foundation::*, Storage::FileSystem::*};
 
@@ -16,18 +20,12 @@ pub struct MacroWorkerHandle {
 #[cfg(windows)]
 impl MacroWorkerHandle {
     pub fn start(config: MacroConfig) -> Result<Self> {
-        let executable = std::env::current_exe()?
-            .parent()
-            .context("failed to locate Runner directory")?
-            .join("EdgeOptimizer_Macro.exe");
-        if !executable.exists() {
-            anyhow::bail!("Macro worker not found at {:?}", executable);
-        }
+        let executable = install_layout::sibling_executable(MACRO_EXE)?;
 
         let mut child = Command::new(&executable)
             .spawn()
             .with_context(|| format!("failed to start {:?}", executable))?;
-        let pipe_handle = match connect_with_timeout(Duration::from_secs(3)) {
+        let pipe_handle = match connect_with_timeout(child.id(), Duration::from_secs(3)) {
             Ok(handle) => handle,
             Err(error) => {
                 let _ = child.kill();
@@ -85,9 +83,14 @@ impl Drop for MacroWorkerHandle {
     }
 }
 
+/// Connect to the worker's pipe and confirm the server is the child Runner started,
+/// so a pipe pre-created under the same name by another process is never trusted.
 #[cfg(windows)]
-fn connect_with_timeout(timeout: Duration) -> Result<HANDLE> {
-    let pipe_name: Vec<u16> = MACRO_PIPE_NAME.encode_utf16().chain(Some(0)).collect();
+fn connect_with_timeout(worker_pid: u32, timeout: Duration) -> Result<HANDLE> {
+    let pipe_name: Vec<u16> = crate::ipc::macro_pipe_name()?
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
     let started = Instant::now();
     while started.elapsed() < timeout {
         let result = unsafe {
@@ -103,7 +106,25 @@ fn connect_with_timeout(timeout: Duration) -> Result<HANDLE> {
         };
         if let Ok(handle) = result {
             if !handle.is_invalid() {
-                return Ok(handle);
+                return match crate::pipe_security::pipe_server_process_id(handle) {
+                    Ok(server_pid) if server_pid == worker_pid => Ok(handle),
+                    Ok(server_pid) => {
+                        unsafe {
+                            let _ = CloseHandle(handle);
+                        }
+                        anyhow::bail!(
+                            "Macro pipe is served by process {} instead of worker {}",
+                            server_pid,
+                            worker_pid
+                        )
+                    }
+                    Err(error) => {
+                        unsafe {
+                            let _ = CloseHandle(handle);
+                        }
+                        Err(error)
+                    }
+                };
             }
         }
         std::thread::sleep(Duration::from_millis(50));

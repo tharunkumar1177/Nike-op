@@ -6,13 +6,14 @@ Each edition installs, starts, updates, and uninstalls as one unit. The Store ed
 
 ## Current verified status
 
-**Status:** Planned
+**Status:** Partial
 
-Code inspection on 2026-09-28:
+The install-layout rules are implemented. No installer or package exists yet. Code inspection on 2026-09-28:
 
-- The `bundle` job in `.github/workflows/buildntest.yml` copies the release Rust executables and the self-contained WinUI publish output into one unpackaged artifact folder. No MSIX manifest, WiX project, signing step, or installer exists.
-- Runner resolves `EdgeOptimizer.Settings.WinUI.exe` beside its own image (`spawn_settings_window` in `crates/runner/src/main.rs`), and the Macro worker is resolved the same way (`crates/core/src/macro_worker.rs`).
-- `crates/core/src/crosshair_overlay.rs` also searches the current directory and other fallback paths, and stops the overlay with `taskkill /F /IM EdgeOptimizer_Crosshair.exe`.
+- The `bundle` job in `.github/workflows/buildntest.yml` copies the release Runner, Crosshair, Macro, and EngineSvc executables and the self-contained WinUI publish output into one unpackaged artifact folder. No MSIX manifest, WiX project, signing step, or installer exists.
+- Runner, the crosshair launcher, and the Macro launcher resolve Settings and the workers only through `crates/core/src/install_layout.rs`. It accepts only bare `.exe` names and joins them to the running image's directory; traversal, absolute, drive-relative, padded, and non-executable names are rejected by unit tests.
+- Runner stops the crosshair and Macro workers through the process handles it owns.
+- The legacy Iced settings crate and `engine_ctl` have been deleted from the workspace.
 - No code registers Runner to start at sign-in.
 - The broker is installed only by `scripts/install-engine-service.ps1` as a SYSTEM scheduled task.
 - `apps/EdgeOptimizer.Settings.WinUI` is built with `WindowsPackageType=None` and a self-contained Windows App SDK.
@@ -86,8 +87,9 @@ CI builds and validates package structure, signatures, and manifest schema. Inst
 - `scripts/install-engine-service.ps1` — transitional scheduled-task installer to be replaced by the WiX service registration.
 - `apps/EdgeOptimizer.Settings.WinUI/EdgeOptimizer.Settings.WinUI.csproj` — packaging type and Windows App SDK deployment mode.
 - `crates/runner/src/main.rs` — Settings path resolution and single-instance mutex.
-- `crates/core/src/crosshair_overlay.rs` — crosshair worker path resolution and stop behavior.
-- `crates/core/src/macro_worker.rs` — Macro worker path resolution.
+- `crates/core/src/install_layout.rs` — sibling-executable resolution and its unit tests.
+- `crates/core/src/crosshair_overlay.rs` — crosshair worker launch and owned-handle stop.
+- `crates/core/src/macro_worker.rs` — Macro worker launch and owned-handle stop.
 
 ## Acceptance or verification criteria
 
@@ -95,8 +97,8 @@ CI builds and validates package structure, signatures, and manifest schema. Inst
 - [ ] The Store manifest declares only `runFullTrust`, a Runner startup task, a Settings application without a Start menu entry, and a Windows App SDK framework dependency.
 - [ ] CI produces a signed Full edition setup executable containing the per-machine MSI.
 - [ ] The Full edition installs, repairs, upgrades, and uninstalls the broker service with recovery actions and leaves no orphaned service or task.
-- [ ] Every component resolves sibling executables only beside Runner's image.
-- [ ] Runner stops workers by the process handle it owns, never by image name.
+- [x] Every component resolves sibling executables only beside Runner's image.
+- [x] Runner stops workers by the process handle it owns, never by image name.
 - [ ] Runner starts at sign-in in both editions, and the user can disable it.
 - [ ] Each installer blocks while the other edition is present.
 - [ ] Neither edition ships the legacy Iced settings executable or `EdgeOptimizer_EngineCtl.exe`.
