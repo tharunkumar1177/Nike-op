@@ -280,12 +280,17 @@ mod tests {
 
     #[test]
     fn test_macro_action_display() {
-        // Verifies a key action includes its key and delay in the display label.
-        let action = MacroAction::KeyPress {
+        // Verifies key actions render as a direction arrow and key, without the delay.
+        let press = MacroAction::KeyPress {
             key: "A".to_string(),
             delay_ms: 10,
         };
-        assert_eq!(action.display_text(), "Key: A ⬇ (10ms)");
+        let release = MacroAction::KeyRelease {
+            key: "A".to_string(),
+            delay_ms: 10,
+        };
+        assert_eq!(press.display_text(), "↓ A");
+        assert_eq!(release.display_text(), "↑ A");
     }
 
     #[test]
