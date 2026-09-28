@@ -86,8 +86,7 @@ fn remove_entry(path: &Path) -> std::io::Result<()> {
 }
 
 fn clear_browser_cache() -> Result<String> {
-    let local_app_data = std::env::var_os("LOCALAPPDATA")
-        .context("LOCALAPPDATA is not set")?;
+    let local_app_data = std::env::var_os("LOCALAPPDATA").context("LOCALAPPDATA is not set")?;
     let tally = clear_directory_contents(&browser_cache_paths(Path::new(&local_app_data)));
     Ok(format!(
         "Browser cache: removed {} item(s), skipped {} in use, across {} folder(s)",

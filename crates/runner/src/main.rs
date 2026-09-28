@@ -554,7 +554,12 @@ fn optimize_profile(
     if let Some(handle) = macro_handle.take() {
         handle.stop();
     }
-    if profile.macros.macros.iter().any(|macro_def| macro_def.enabled) {
+    if profile
+        .macros
+        .macros
+        .iter()
+        .any(|macro_def| macro_def.enabled)
+    {
         match MacroWorkerHandle::start(profile.macros.clone()) {
             Ok(handle) => {
                 *macro_handle = Some(handle);

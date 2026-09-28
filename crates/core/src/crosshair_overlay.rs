@@ -53,8 +53,8 @@ pub fn start_overlay(
         return Err(format!("Image not found: {}", image_path));
     }
 
-    let crosshair_exe = install_layout::sibling_executable(CROSSHAIR_EXE)
-        .map_err(|error| error.to_string())?;
+    let crosshair_exe =
+        install_layout::sibling_executable(CROSSHAIR_EXE).map_err(|error| error.to_string())?;
 
     tracing::info!(
         "starting crosshair worker {} (offset {}, {})",

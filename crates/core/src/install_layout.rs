@@ -13,8 +13,7 @@ pub const MACRO_EXE: &str = "EdgeOptimizer_Macro.exe";
 
 /// Resolve an executable that must exist beside the running image.
 pub fn sibling_executable(file_name: &str) -> Result<PathBuf> {
-    let current = std::env::current_exe()
-        .context("failed to resolve the running executable")?;
+    let current = std::env::current_exe().context("failed to resolve the running executable")?;
     let directory = current
         .parent()
         .context("the running executable has no parent directory")?;
@@ -41,10 +40,7 @@ pub fn sibling_in(directory: &Path, file_name: &str) -> Result<PathBuf> {
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"));
 
-    if file_name.is_empty()
-        || file_name.trim() != file_name
-        || !is_bare_name
-        || !has_exe_extension
+    if file_name.is_empty() || file_name.trim() != file_name || !is_bare_name || !has_exe_extension
     {
         bail!("invalid sibling executable name: {:?}", file_name);
     }

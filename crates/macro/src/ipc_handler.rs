@@ -87,7 +87,9 @@ pub fn run_ipc_listener(state: Arc<Mutex<MacroAppState>>) -> Result<()> {
             match read_result {
                 Ok(_) if bytes_read > 0 => {
                     // Deserialize and process message
-                    match bincode::deserialize::<RunnerToMacroCommand>(&buffer[..bytes_read as usize]) {
+                    match bincode::deserialize::<RunnerToMacroCommand>(
+                        &buffer[..bytes_read as usize],
+                    ) {
                         Ok(message) => {
                             debug!("Received IPC message: {:?}", message);
                             process_message(&state, message);
