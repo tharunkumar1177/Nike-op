@@ -12,6 +12,16 @@ experience; Runner owns the system tray and quick flyout.
 
 WinUI 3 is the active Settings UI and is launched on demand by Runner from the packaged `EdgeOptimizer.Settings.WinUI.exe`. It restores the full profile-scoped Dashboard, Crosshair, Macros, and System Tweaks surfaces and uses a transitional Bincode compatibility client to hydrate Runner state, save profile collections, request live processes and cleanup, and activate profiles. Runner's pipe accepts the client non-blockingly. A Windows CI job tests UI-independent logic, compiles WinUI XAML, and publishes a self-contained client artifact. Generated Protobuf bindings and runtime UI smoke automation remain planned.
 
+Code inspection on 2026-09-28 (Core unit tests only; runtime UI behavior is not verified):
+
+- The client shows no placeholder profiles, macros, or processes. A new `ProfileWorkspace` matches Runner's `create_profile` defaults, so nothing is selected for termination.
+- Until Runner supplies a snapshot, the shell shows an offline, connecting, or no-profiles empty state, with **Retry** reconnecting the pipe.
+- The sidebar marks the current page, and profiles can be duplicated or deleted; deletion asks for confirmation first.
+- IPC send failures are reported in the status bar instead of escaping the command.
+- Feature pages report "Not saved" when Runner does not accept a save.
+- The Dashboard setup checklist is computed from profile state.
+- The Macros editor checks Runner's name, action, and shortcut rules inline before saving.
+
 The current tray single-click path is an exception to the intended on-demand
 boundary: Runner launches Settings with `--flyout-only`, but WinUI ignores that
 mode and loads the full Settings window. The approved target is documented in
@@ -63,6 +73,7 @@ existing window. Runner never uses WinUI `DispatcherQueue`.
 
 - `apps/EdgeOptimizer.Settings.Core` — UI-independent models, contracts, and view-model logic.
 - `apps/EdgeOptimizer.Settings.WinUI` — active WinUI presentation client.
+- `tests/EdgeOptimizer.Settings.Core.Tests/MainWindowViewModelTests.cs` — hydration, empty and offline states, reconnect, profile CRUD, and IPC failure reporting.
 - `apps/EdgeOptimizer.Settings.Core/Services/RunnerPipeIdentity.cs` and `tests/EdgeOptimizer.Settings.Core.Tests/RunnerPipeIdentityTests.cs` — pipe naming and Runner identity rules.
 - `crates/runner/src/main.rs` — launches the packaged WinUI client.
 
@@ -83,6 +94,8 @@ existing window. Runner never uses WinUI `DispatcherQueue`.
   `DispatcherQueue` and activates the existing window.
 - [x] Save supported profile state, activate profiles, and request live process/cleanup operations through Runner's transitional transport.
 - [x] Include WinUI 3 build and logic tests in CI.
+- [x] Never present placeholder profile, macro, or process data as Runner state; show empty and offline states instead.
+- [x] Surface Runner save and send failures without crashing and without reporting success.
 - [ ] Present Runner-reported capability availability and reasons, and disable unavailable controls.
 - [ ] Publish framework-dependent on the Windows App SDK runtime for the Store edition.
 - [x] Delete the legacy Iced settings executable and `crates/core/src/gui`.

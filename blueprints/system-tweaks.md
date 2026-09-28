@@ -17,7 +17,7 @@ Code inspection on 2026-09-05 confirmed:
 
 The WinUI page provides profile-scoped process selection, filtering, fan and cleanup toggles, selection totals, and restore-default behavior, with unit tests.
 
-WinUI saves supported profile fields through Runner and requests a live read-only process snapshot. The per-profile cleanup toggles and run commands in `SystemTweaksViewModel` are transitional. Runner now executes cleanup requests in the user's context rather than in EngineSvc, but the controls stay disabled because the app-wide [Disk cleanup](disk-cleanup.md) page supersedes them. `fan_speed_max` is stored but not applied by Engine command dispatch. PID-level safety validation is not implemented.
+WinUI saves supported profile fields through Runner and requests a live read-only process snapshot when the page opens and on **Refresh**. A snapshot keeps selected apps that are not currently running, so a refresh never shrinks the saved close list. New profiles select no processes. The fan toggle is disabled to match its unavailable state. The per-profile cleanup toggles and run commands in `SystemTweaksViewModel` are transitional and are not shown. Runner now executes cleanup requests in the user's context rather than in EngineSvc, but the controls stay disabled because the app-wide [Disk cleanup](disk-cleanup.md) page supersedes them. `fan_speed_max` is stored but not applied by Engine command dispatch. PID-level safety validation is not implemented.
 
 ## Architecture dependencies
 
@@ -83,7 +83,7 @@ Partial results remain visible per operation. A failed termination or fan-policy
 - `crates/runner/src/main.rs` — activation, persistence, and Engine state transitions.
 - `crates/engine_service/src/main.rs` — transitional process execution.
 - `apps/EdgeOptimizer.Settings.Core/ViewModels/SystemTweaksViewModel.cs` — profile selections, live process presentation, and transitional cleanup toggles.
-- `tests/EdgeOptimizer.Settings.Core.Tests/SystemTweaksViewModelTests.cs` — filtering, totals, safe defaults, and profile isolation tests.
+- `tests/EdgeOptimizer.Settings.Core.Tests/SystemTweaksViewModelTests.cs` — filtering, totals, safe defaults, profile isolation, selection retention across snapshots, and unavailable-Runner feedback tests.
 
 ## Acceptance or verification criteria
 

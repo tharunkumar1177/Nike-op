@@ -10,18 +10,18 @@ namespace EdgeOptimizer.Settings.Core.ViewModels;
 public sealed class CrosshairViewModel : ObservableObject
 {
     private readonly IFilePicker _filePicker;
-    private readonly Func<Task> _saveAsync;
+    private readonly Func<Task<bool>> _saveAsync;
     private ProfileWorkspace? _profile;
     private string _feedbackText = "Crosshair changes are profile-scoped and saved through Runner.";
 
-    public CrosshairViewModel(IFilePicker filePicker, Func<Task>? saveAsync = null)
+    public CrosshairViewModel(IFilePicker filePicker, Func<Task<bool>>? saveAsync = null)
     {
         _filePicker = filePicker;
-        _saveAsync = saveAsync ?? (() => Task.CompletedTask);
+        _saveAsync = saveAsync ?? (() => Task.FromResult(true));
         MoveCommand = new RelayCommand<string>(Move);
         CenterCommand = new RelayCommand(Center);
         ReplaceImageCommand = new AsyncRelayCommand(ReplaceImageAsync);
-        RemoveImageCommand = new RelayCommand(RemoveImage);
+        RemoveImageCommand = new RelayCommand(RemoveImage, () => HasImage);
         HidePreviewCommand = new RelayCommand(HidePreview);
         ResetCommand = new RelayCommand(Reset);
         SaveCommand = new AsyncRelayCommand(SaveAsync);
@@ -70,8 +70,9 @@ public sealed class CrosshairViewModel : ObservableObject
         }
     }
 
-    public string ImageName => _profile?.CrosshairImageName ?? "No image selected";
+    public string ImageName => _profile?.CrosshairImageName ?? ProfileWorkspace.NoImageName;
     public string? ImagePath => _profile?.CrosshairImagePath;
+    public bool HasImage => _profile?.HasCrosshairImage == true;
     public string OffsetSummary => $"Offset X  {XOffset}  •  Y  {YOffset}";
     public string FeedbackText { get => _feedbackText; private set => SetProperty(ref _feedbackText, value); }
 
@@ -81,9 +82,16 @@ public sealed class CrosshairViewModel : ObservableObject
         OnPropertyChanged(nameof(XOffset));
         OnPropertyChanged(nameof(YOffset));
         OnPropertyChanged(nameof(OverlayEnabled));
+        OnPropertyChanged(nameof(OffsetSummary));
+        NotifyImage();
+    }
+
+    private void NotifyImage()
+    {
         OnPropertyChanged(nameof(ImageName));
         OnPropertyChanged(nameof(ImagePath));
-        OnPropertyChanged(nameof(OffsetSummary));
+        OnPropertyChanged(nameof(HasImage));
+        ((RelayCommand)RemoveImageCommand).NotifyCanExecuteChanged();
     }
 
     private void Move(string? direction)
@@ -111,42 +119,40 @@ public sealed class CrosshairViewModel : ObservableObject
         if (string.IsNullOrWhiteSpace(selectedPath) || _profile is null) return;
         _profile.CrosshairImageName = Path.GetFileName(selectedPath);
         _profile.CrosshairImagePath = selectedPath;
-        OnPropertyChanged(nameof(ImageName));
-        OnPropertyChanged(nameof(ImagePath));
+        NotifyImage();
         FeedbackText = "Image selected. Save changes to persist the path through Runner.";
     }
 
     private void RemoveImage()
     {
         if (_profile is null) return;
-        _profile.CrosshairImageName = "No image selected";
+        _profile.CrosshairImageName = ProfileWorkspace.NoImageName;
         _profile.CrosshairImagePath = null;
-        OnPropertyChanged(nameof(ImageName));
-        OnPropertyChanged(nameof(ImagePath));
-        FeedbackText = "Crosshair image removed from preview state.";
+        NotifyImage();
+        FeedbackText = "Image removed. The overlay will not start until you choose a PNG.";
     }
 
     private void HidePreview()
     {
         OverlayEnabled = false;
-        FeedbackText = "Preview hidden.";
+        FeedbackText = "Overlay turned off for this profile.";
     }
 
     private void Reset()
     {
         if (_profile is null) return;
         OverlayEnabled = true;
-        _profile.CrosshairImageName = "dot-crosshair.png";
+        _profile.CrosshairImageName = ProfileWorkspace.NoImageName;
         _profile.CrosshairImagePath = null;
-        OnPropertyChanged(nameof(ImageName));
-        OnPropertyChanged(nameof(ImagePath));
+        NotifyImage();
         Center();
-        FeedbackText = "Crosshair preview reset.";
+        FeedbackText = "Crosshair reset to defaults.";
     }
 
     private async Task SaveAsync()
     {
-        await _saveAsync();
-        FeedbackText = "Crosshair settings saved to Runner.";
+        FeedbackText = await _saveAsync()
+            ? "Crosshair settings saved to Runner."
+            : "Not saved. Runner is unavailable; your edits are kept in this window.";
     }
 }

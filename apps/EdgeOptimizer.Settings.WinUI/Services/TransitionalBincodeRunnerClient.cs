@@ -35,6 +35,7 @@ public sealed class TransitionalBincodeRunnerClient : IRunnerClient, IAsyncDispo
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         if (IsConnected) return;
+        await ReleaseDisconnectedPipeAsync();
         int sessionId;
         using (var current = Process.GetCurrentProcess()) sessionId = current.SessionId;
         var pipe = new NamedPipeClientStream(".", RunnerPipeIdentity.PipeName(sessionId), PipeDirection.InOut, PipeOptions.Asynchronous);
@@ -233,6 +234,18 @@ public sealed class TransitionalBincodeRunnerClient : IRunnerClient, IAsyncDispo
         }
     }
 
+    private async Task ReleaseDisconnectedPipeAsync()
+    {
+        var lifetime = _lifetime;
+        var pipe = _pipe;
+        _lifetime = null;
+        _pipe = null;
+        _pendingActivation = null;
+        lifetime?.Cancel();
+        lifetime?.Dispose();
+        if (pipe is not null) await pipe.DisposeAsync();
+    }
+
     private void Post(Action action)
     {
         if (!_dispatcher.TryEnqueue(() => action())) action();
@@ -308,16 +321,14 @@ internal static class BincodeCodec
     public static ProfileWorkspace ReadProfile(BinaryReader reader)
     {
         var profile = new ProfileWorkspace(ReadString(reader), false);
-        profile.Processes.Clear();
         var processCount = checked((int)reader.ReadUInt64());
         for (var index = 0; index < processCount; index++) profile.Processes.Add(new ProcessItem(ReadString(reader), "—", "—", true));
         profile.CrosshairImagePath = ReadOptionString(reader);
-        profile.CrosshairImageName = profile.CrosshairImagePath is null ? "No image selected" : Path.GetFileName(profile.CrosshairImagePath);
+        profile.CrosshairImageName = profile.CrosshairImagePath is null ? ProfileWorkspace.NoImageName : Path.GetFileName(profile.CrosshairImagePath);
         profile.CrosshairXOffset = reader.ReadInt32();
         profile.CrosshairYOffset = reader.ReadInt32();
         profile.OverlayEnabled = reader.ReadBoolean();
         profile.FanBoostEnabled = reader.ReadBoolean();
-        profile.Macros.Clear();
         var macroCount = checked((int)reader.ReadUInt64());
         for (var index = 0; index < macroCount; index++) profile.Macros.Add(ReadMacro(reader));
         return profile;

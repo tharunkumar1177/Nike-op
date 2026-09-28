@@ -11,18 +11,7 @@ use tracing::{debug, error, info, warn};
 #[cfg(windows)]
 use windows::Win32::{Foundation::*, Storage::FileSystem::*, System::Pipes::*};
 
-/// Messages from Macro to Settings process
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub enum MacroToSettings {
-    /// Macro was triggered (for UI feedback)
-    MacroTriggered(String),
-    /// Error occurred during execution
-    ExecutionError(String, String), // (macro_name, error_message)
-    /// Macro process ready
-    Ready,
-}
-
-/// Run the IPC listener that receives config updates from Settings
+/// Run the IPC listener that receives config updates from Runner
 #[cfg(windows)]
 pub fn run_ipc_listener(state: Arc<Mutex<MacroAppState>>) -> Result<()> {
     info!("Starting Macro IPC listener...");

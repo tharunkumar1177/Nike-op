@@ -10,6 +10,7 @@ namespace EdgeOptimizer.Settings.WinUI.Views;
 public partial class CrosshairView : UserControl
 {
     private CrosshairViewModel? _viewModel;
+    private bool _imageLoadFailed;
 
     public CrosshairView()
     {
@@ -32,15 +33,16 @@ public partial class CrosshairView : UserControl
     private void ViewModelPropertyChanged(object? sender, PropertyChangedEventArgs args)
     {
         if (args.PropertyName == nameof(CrosshairViewModel.ImagePath)) _ = LoadPreviewAsync();
+        else if (args.PropertyName == nameof(CrosshairViewModel.OverlayEnabled)) UpdateNotice();
     }
 
     private async Task LoadPreviewAsync()
     {
         var path = _viewModel?.ImagePath;
+        _imageLoadFailed = false;
         if (string.IsNullOrWhiteSpace(path))
         {
-            PreviewImage.Source = null;
-            FallbackCrosshair.Visibility = Visibility.Visible;
+            ShowFallback();
             return;
         }
 
@@ -50,13 +52,37 @@ public partial class CrosshairView : UserControl
             await using var stream = await file.OpenStreamForReadAsync();
             var bitmap = new BitmapImage();
             await bitmap.SetSourceAsync(stream.AsRandomAccessStream());
+            if (_viewModel?.ImagePath != path) return;
             PreviewImage.Source = bitmap;
             FallbackCrosshair.Visibility = Visibility.Collapsed;
+            UpdateNotice();
         }
         catch
         {
-            PreviewImage.Source = null;
-            FallbackCrosshair.Visibility = Visibility.Visible;
+            if (_viewModel?.ImagePath != path) return;
+            _imageLoadFailed = true;
+            ShowFallback();
         }
+    }
+
+    private void ShowFallback()
+    {
+        PreviewImage.Source = null;
+        FallbackCrosshair.Visibility = Visibility.Visible;
+        UpdateNotice();
+    }
+
+    private void UpdateNotice()
+    {
+        string? notice = _viewModel switch
+        {
+            null => null,
+            { OverlayEnabled: false } => "The overlay is off for this profile.",
+            _ when _imageLoadFailed => "This image could not be loaded. Choose another PNG.",
+            { HasImage: false } => "No image selected. The overlay will not start until you choose a PNG.",
+            _ => null,
+        };
+        PreviewNoticeText.Text = notice ?? string.Empty;
+        PreviewNotice.Visibility = notice is null ? Visibility.Collapsed : Visibility.Visible;
     }
 }

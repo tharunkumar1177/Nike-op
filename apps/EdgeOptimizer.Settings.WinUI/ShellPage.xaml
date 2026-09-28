@@ -17,32 +17,45 @@
         </Grid>
 
         <StackPanel Grid.Row="1" Margin="0,22,0,0">
-          <Button Style="{StaticResource SidebarButtonStyle}" Tag="Dashboard" Click="OnNavigateClick" AutomationProperties.AutomationId="Navigation.Dashboard"><StackPanel Orientation="Horizontal" Spacing="14"><FontIcon Glyph="&#xE80F;"/><TextBlock Text="Dashboard"/></StackPanel></Button>
-          <Button Style="{StaticResource SidebarButtonStyle}" Tag="Crosshair" Click="OnNavigateClick" AutomationProperties.AutomationId="Navigation.Crosshair"><StackPanel Orientation="Horizontal" Spacing="14"><FontIcon Glyph="&#xF272;"/><TextBlock Text="Crosshair"/></StackPanel></Button>
-          <Button Style="{StaticResource SidebarButtonStyle}" Tag="Macros" Click="OnNavigateClick" AutomationProperties.AutomationId="Navigation.Macros"><StackPanel Orientation="Horizontal" Spacing="14"><FontIcon Glyph="&#xE765;"/><TextBlock Text="Macros"/></StackPanel></Button>
-          <Button Style="{StaticResource SidebarButtonStyle}" Tag="SystemTweaks" Click="OnNavigateClick" AutomationProperties.AutomationId="Navigation.SystemTweaks"><StackPanel Orientation="Horizontal" Spacing="14"><FontIcon Glyph="&#xE90F;"/><TextBlock Text="System Tweaks"/></StackPanel></Button>
+          <Button x:Name="NavDashboard" Style="{StaticResource SidebarButtonStyle}" Tag="Dashboard" Click="OnNavigateClick" AutomationProperties.AutomationId="Navigation.Dashboard" AutomationProperties.Name="Dashboard"><StackPanel Orientation="Horizontal" Spacing="14"><FontIcon Glyph="&#xE80F;"/><TextBlock Text="Dashboard"/></StackPanel></Button>
+          <Button x:Name="NavCrosshair" Style="{StaticResource SidebarButtonStyle}" Tag="Crosshair" Click="OnNavigateClick" AutomationProperties.AutomationId="Navigation.Crosshair" AutomationProperties.Name="Crosshair"><StackPanel Orientation="Horizontal" Spacing="14"><FontIcon Glyph="&#xF272;"/><TextBlock Text="Crosshair"/></StackPanel></Button>
+          <Button x:Name="NavMacros" Style="{StaticResource SidebarButtonStyle}" Tag="Macros" Click="OnNavigateClick" AutomationProperties.AutomationId="Navigation.Macros" AutomationProperties.Name="Macros"><StackPanel Orientation="Horizontal" Spacing="14"><FontIcon Glyph="&#xE765;"/><TextBlock Text="Macros"/></StackPanel></Button>
+          <Button x:Name="NavSystemTweaks" Style="{StaticResource SidebarButtonStyle}" Tag="SystemTweaks" Click="OnNavigateClick" AutomationProperties.AutomationId="Navigation.SystemTweaks" AutomationProperties.Name="System Tweaks"><StackPanel Orientation="Horizontal" Spacing="14"><FontIcon Glyph="&#xE90F;"/><TextBlock Text="System Tweaks"/></StackPanel></Button>
         </StackPanel>
 
         <TextBlock Grid.Row="2" Text="YOUR PROFILES" Style="{StaticResource MutedTextStyle}" FontSize="12" Margin="12,30,0,10"/>
         <Grid Grid.Row="3">
           <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-          <ListView ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile, Mode=TwoWay}" Background="Transparent" BorderThickness="0" AutomationProperties.AutomationId="Profiles.List">
+          <ListView ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile, Mode=TwoWay}" Background="Transparent" BorderThickness="0" AutomationProperties.AutomationId="Profiles.List" AutomationProperties.Name="Profiles">
             <ListView.ItemTemplate>
               <DataTemplate x:DataType="models:ProfileWorkspace">
-                <Grid MinHeight="42" Padding="4,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <Grid MinHeight="42" Padding="4,0" ToolTipService.ToolTip="{x:Bind Name}"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                   <TextBlock Text="{x:Bind Name}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
                   <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" Visibility="{x:Bind IsActive, Mode=OneWay}"><Ellipse Width="7" Height="7" Fill="{ThemeResource AppSuccessBrush}"/><TextBlock Text="ACTIVE" Foreground="{ThemeResource AppSuccessBrush}" FontSize="11"/></StackPanel>
                 </Grid>
               </DataTemplate>
             </ListView.ItemTemplate>
           </ListView>
-          <Button Grid.Row="1" Content="＋  New profile" Command="{Binding NewProfileCommand}" Style="{StaticResource OutlineButtonStyle}" HorizontalAlignment="Stretch" Margin="0,12,0,0" AutomationProperties.AutomationId="Profiles.New"/>
+          <TextBlock Text="No profiles" Style="{StaticResource MutedTextStyle}" Margin="12,4,0,0" Visibility="{Binding ShowEmptyState, Converter={StaticResource BoolToVisibility}}"/>
+          <Grid Grid.Row="1" ColumnSpacing="8" Margin="0,12,0,0">
+            <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <Button Command="{Binding NewProfileCommand}" Style="{StaticResource OutlineButtonStyle}" HorizontalAlignment="Stretch" AutomationProperties.AutomationId="Profiles.New">
+              <StackPanel Orientation="Horizontal" Spacing="8"><FontIcon Glyph="&#xE710;" FontSize="14"/><TextBlock Text="New profile"/></StackPanel>
+            </Button>
+            <Button x:Name="ProfileActionsButton" Grid.Column="1" Width="40" IsEnabled="{Binding HasSelectedProfile}" AutomationProperties.AutomationId="Profiles.More" AutomationProperties.Name="More profile actions" ToolTipService.ToolTip="More profile actions">
+              <FontIcon Glyph="&#xE712;" FontSize="14"/>
+              <Button.Flyout>
+                <MenuFlyout Placement="TopEdgeAlignedRight">
+                  <MenuFlyoutItem Text="Duplicate profile" Click="OnDuplicateProfileClick" AutomationProperties.AutomationId="Profiles.Duplicate"><MenuFlyoutItem.Icon><FontIcon Glyph="&#xE8C8;"/></MenuFlyoutItem.Icon></MenuFlyoutItem>
+                  <MenuFlyoutSeparator/>
+                  <MenuFlyoutItem Text="Delete profile…" Click="OnDeleteProfileClick" Foreground="{ThemeResource AppDangerBrush}" AutomationProperties.AutomationId="Profiles.Delete"><MenuFlyoutItem.Icon><FontIcon Glyph="&#xE74D;"/></MenuFlyoutItem.Icon></MenuFlyoutItem>
+                </MenuFlyout>
+              </Button.Flyout>
+            </Button>
+          </Grid>
         </Grid>
 
-        <Grid Grid.Row="4" Margin="8,22,8,0">
-          <StackPanel Orientation="Horizontal" Spacing="8"><Button Content="?" Width="34" Height="34"/><Button Content="i" Width="34" Height="34"/></StackPanel>
-          <TextBlock Text="v1.0.0" HorizontalAlignment="Right" VerticalAlignment="Center" Style="{StaticResource MutedTextStyle}"/>
-        </Grid>
+        <TextBlock x:Name="VersionText" Grid.Row="4" Margin="12,22,8,0" Style="{StaticResource MutedTextStyle}" FontSize="12"/>
       </Grid>
     </Border>
 
@@ -52,13 +65,45 @@
       <Grid Grid.Row="1" Margin="2,10,2,20">
         <Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
         <StackPanel>
-          <StackPanel Orientation="Horizontal" Spacing="8"><TextBlock Text="{Binding SelectedProfile.Name}" Foreground="{ThemeResource AppAccentBrush}"/><TextBlock Text="/" Style="{StaticResource MutedTextStyle}"/><TextBlock Text="{Binding CurrentPageLabel}"/></StackPanel>
-          <StackPanel Orientation="Horizontal" Spacing="18" Margin="0,8,0,0"><TextBlock Text="{Binding CurrentPageTitle}" Style="{StaticResource PageTitleStyle}"/><Border Background="#0E2B1A" BorderBrush="{ThemeResource AppSuccessBrush}" BorderThickness="1" CornerRadius="16" Padding="12,5"><StackPanel Orientation="Horizontal" Spacing="7"><Ellipse Width="7" Height="7" Fill="{ThemeResource AppSuccessBrush}"/><TextBlock Text="{Binding RunnerStatusLabel}"/></StackPanel></Border></StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{Binding HasSelectedProfile, Converter={StaticResource BoolToVisibility}}"><TextBlock Text="{Binding SelectedProfile.Name}" Foreground="{ThemeResource AppAccentBrush}" MaxWidth="360" TextTrimming="CharacterEllipsis"/><TextBlock Text="/" Style="{StaticResource MutedTextStyle}"/><TextBlock Text="{Binding CurrentPageLabel}"/></StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="18" Margin="0,8,0,0">
+            <TextBlock Text="{Binding CurrentPageTitle}" Style="{StaticResource PageTitleStyle}"/>
+            <Border VerticalAlignment="Center" Background="{ThemeResource AppSuccessSubtleBrush}" BorderBrush="{ThemeResource AppSuccessBrush}" BorderThickness="1" CornerRadius="16" Padding="12,5" Visibility="{Binding IsRunnerConnected, Converter={StaticResource BoolToVisibility}}" AutomationProperties.Name="Runner linked">
+              <StackPanel Orientation="Horizontal" Spacing="7"><Ellipse Width="7" Height="7" Fill="{ThemeResource AppSuccessBrush}" VerticalAlignment="Center"/><TextBlock Text="{Binding RunnerStatusLabel}"/></StackPanel>
+            </Border>
+            <Border VerticalAlignment="Center" Background="{ThemeResource AppInsetBrush}" BorderBrush="{ThemeResource AppStrokeBrush}" BorderThickness="1" CornerRadius="16" Padding="12,5" Visibility="{Binding IsConnecting, Converter={StaticResource BoolToVisibility}}">
+              <StackPanel Orientation="Horizontal" Spacing="8"><ProgressRing IsActive="{Binding IsConnecting}" Width="12" Height="12"/><TextBlock Text="{Binding RunnerStatusLabel}"/></StackPanel>
+            </Border>
+            <Border VerticalAlignment="Center" Background="{ThemeResource AppWarningSubtleBrush}" BorderBrush="{ThemeResource AppWarningBrush}" BorderThickness="1" CornerRadius="16" Padding="12,1,4,1" Visibility="{Binding IsRunnerOffline, Converter={StaticResource BoolToVisibility}}">
+              <StackPanel Orientation="Horizontal" Spacing="7"><Ellipse Width="7" Height="7" Fill="{ThemeResource AppWarningBrush}" VerticalAlignment="Center"/><TextBlock Text="{Binding RunnerStatusLabel}" VerticalAlignment="Center"/><HyperlinkButton Content="Retry" Command="{Binding ReconnectCommand}" Padding="8,4" AutomationProperties.AutomationId="Runner.Retry"/></StackPanel>
+            </Border>
+          </StackPanel>
         </StackPanel>
-        <Button Grid.Column="1" Content="Activate profile" Command="{Binding ActivateProfileCommand}" Style="{StaticResource AccentButtonStyle}" MinWidth="150" AutomationProperties.AutomationId="Profile.Activate"/>
+        <Button Grid.Column="1" Command="{Binding ActivateProfileCommand}" Style="{StaticResource AccentButtonStyle}" MinWidth="150" VerticalAlignment="Bottom" AutomationProperties.AutomationId="Profile.Activate">
+          <StackPanel Orientation="Horizontal" Spacing="8"><FontIcon Glyph="&#xE768;" FontSize="14"/><TextBlock Text="Activate profile"/></StackPanel>
+        </Button>
       </Grid>
-      <ContentControl x:Name="PageHost" Grid.Row="2"/>
-      <Border Grid.Row="3" Background="{ThemeResource AppCardBrush}" BorderBrush="{ThemeResource AppStrokeBrush}" BorderThickness="1" CornerRadius="7" Padding="12,8" Margin="2,14,2,0"><TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedTextStyle}" TextTrimming="CharacterEllipsis"/></Border>
+
+      <ContentControl x:Name="PageHost" Grid.Row="2" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" Visibility="{Binding HasSelectedProfile, Converter={StaticResource BoolToVisibility}}"/>
+      <Border Grid.Row="2" Style="{StaticResource CardStyle}" Visibility="{Binding ShowEmptyState, Converter={StaticResource BoolToVisibility}}">
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12">
+          <FontIcon Glyph="&#xE7FC;" FontSize="40" Foreground="{ThemeResource AppAccentBrush}"/>
+          <TextBlock Text="{Binding EmptyStateTitle}" Style="{StaticResource SectionTitleStyle}" HorizontalAlignment="Center"/>
+          <TextBlock Text="{Binding EmptyStateMessage}" Style="{StaticResource EmptyStateTextStyle}"/>
+          <StackPanel Orientation="Horizontal" Spacing="10" HorizontalAlignment="Center" Margin="0,8,0,0">
+            <Button Content="Create profile" Command="{Binding NewProfileCommand}" Style="{StaticResource AccentButtonStyle}" AutomationProperties.AutomationId="EmptyState.CreateProfile"/>
+            <Button Content="Retry connection" Command="{Binding ReconnectCommand}" Visibility="{Binding IsRunnerOffline, Converter={StaticResource BoolToVisibility}}" AutomationProperties.AutomationId="EmptyState.Retry"/>
+          </StackPanel>
+        </StackPanel>
+      </Border>
+
+      <Border Grid.Row="3" Background="{ThemeResource AppCardBrush}" BorderBrush="{ThemeResource AppStrokeBrush}" BorderThickness="1" CornerRadius="7" Padding="12,8" Margin="2,14,2,0" ToolTipService.ToolTip="{Binding StatusMessage}">
+        <Grid ColumnSpacing="10">
+          <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/></Grid.ColumnDefinitions>
+          <FontIcon Glyph="&#xE946;" FontSize="14" Foreground="{ThemeResource AppMutedBrush}" VerticalAlignment="Center"/>
+          <TextBlock Grid.Column="1" Text="{Binding StatusMessage}" Style="{StaticResource MutedTextStyle}" TextTrimming="CharacterEllipsis" AutomationProperties.LiveSetting="Polite" AutomationProperties.AutomationId="Status.Message"/>
+        </Grid>
+      </Border>
     </Grid>
   </Grid>
 </Page>

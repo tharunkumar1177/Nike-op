@@ -159,7 +159,7 @@ blueprint status change explicitly.
 
 # Guardrails
 
-- Don't mock up UI / data, build production grade application
+- Do not mock up UI / data, build production grade application
 - Do not use the word 'NIKE' anywhere in the codebase or during file creation
 - If you can't able to access the Github CLI, end the session and I will give you the logs of the CI (Actions)
 - Never read `prompts.md`

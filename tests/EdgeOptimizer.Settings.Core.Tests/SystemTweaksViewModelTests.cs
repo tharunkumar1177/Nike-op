@@ -9,7 +9,7 @@ public sealed class SystemTweaksViewModelTests
     public void ProcessSearchAndSelectionSummaryAreDeterministic()
     {
         // Verifies filtering is case-insensitive and selected-process totals reflect model changes.
-        var profile = new ProfileWorkspace("Test", false);
+        var profile = Fixtures.ConfiguredProfile();
         var viewModel = new SystemTweaksViewModel();
         viewModel.LoadProfile(profile);
         viewModel.ProcessFilter = "CHROME";
@@ -20,10 +20,39 @@ public sealed class SystemTweaksViewModelTests
     }
 
     [Fact]
+    public void EmptyListExplainsWhetherAFilterIsHidingApps()
+    {
+        // Verifies the empty state distinguishes "nothing loaded" from "nothing matches the search".
+        var viewModel = new SystemTweaksViewModel();
+        viewModel.LoadProfile(new ProfileWorkspace("Empty", false));
+        Assert.True(viewModel.IsProcessListEmpty);
+        Assert.StartsWith("No apps listed yet", viewModel.ProcessListEmptyText);
+
+        viewModel.LoadProfile(Fixtures.ConfiguredProfile());
+        viewModel.ProcessFilter = "notepad";
+        Assert.True(viewModel.IsProcessListEmpty);
+        Assert.Equal("No apps match \"notepad\".", viewModel.ProcessListEmptyText);
+    }
+
+    [Fact]
+    public void NewProfileDefaultsAreSafe()
+    {
+        // Verifies a new profile selects nothing to close and enables no tweak or cleanup options.
+        var viewModel = new SystemTweaksViewModel();
+        viewModel.LoadProfile(new ProfileWorkspace("New", false));
+
+        Assert.False(viewModel.FanBoostEnabled);
+        Assert.False(viewModel.RecycleBinEnabled);
+        Assert.False(viewModel.BrowserCacheEnabled);
+        Assert.Equal(0, viewModel.SelectedCount);
+    }
+
+    [Fact]
     public void RestoreDefaultsClearsTogglesAndProcesses()
     {
         // Verifies restoring safe defaults disables all tweak options and process selections.
-        var profile = new ProfileWorkspace("Test", false);
+        var profile = Fixtures.ConfiguredProfile();
+        profile.FanBoostEnabled = true;
         var viewModel = new SystemTweaksViewModel();
         viewModel.LoadProfile(profile);
 
@@ -40,8 +69,8 @@ public sealed class SystemTweaksViewModelTests
     public void SwitchingProfilesUsesIndependentTweakState()
     {
         // Verifies profile selection swaps tweak values without leaking changes between profiles.
-        var first = new ProfileWorkspace("First", false);
-        var second = new ProfileWorkspace("Second", false) { FanBoostEnabled = false };
+        var first = new ProfileWorkspace("First", false) { FanBoostEnabled = true };
+        var second = new ProfileWorkspace("Second", false);
         var viewModel = new SystemTweaksViewModel();
         viewModel.LoadProfile(first);
         Assert.True(viewModel.FanBoostEnabled);
@@ -53,19 +82,38 @@ public sealed class SystemTweaksViewModelTests
     [Fact]
     public void ProcessSnapshotPreservesSelectionsAndUpdatesMetrics()
     {
-        // Verifies a Runner process refresh keeps selected names while replacing stale CPU and memory values.
-        var profile = new ProfileWorkspace("Test", false);
+        // Verifies a Runner refresh keeps selections (case-insensitively), updates metrics, and keeps selected apps that are not running.
+        var profile = Fixtures.ConfiguredProfile();
         var viewModel = new SystemTweaksViewModel();
         viewModel.LoadProfile(profile);
 
         viewModel.ApplyProcessSnapshot(new[]
         {
-            new ProcessItem("Discord.exe", "2.0%", "200 MB", false),
+            new ProcessItem("discord.EXE", "2.0%", "200 MB", false),
             new ProcessItem("game.exe", "8.0%", "900 MB", false),
         });
 
-        Assert.True(profile.Processes.Single(process => process.Name == "Discord.exe").IsSelected);
+        var discord = profile.Processes.Single(process => process.Name == "discord.EXE");
+        Assert.True(discord.IsSelected);
+        Assert.Equal("2.0%", discord.Cpu);
         Assert.False(profile.Processes.Single(process => process.Name == "game.exe").IsSelected);
-        Assert.Equal("1 selected", viewModel.SelectionSummary);
+        var retained = profile.Processes.Where(process => process.Cpu == SystemTweaksViewModel.NotRunningMetric).Select(process => process.Name);
+        Assert.Equal(new[] { "chrome.exe", "Spotify.exe" }, retained);
+        Assert.DoesNotContain(profile.Processes, process => process.Name == "Steam.exe");
+        Assert.Equal("3 selected", viewModel.SelectionSummary);
+    }
+
+    [Fact]
+    public async Task UnavailableRunnerIsReportedForRefreshAndCleanup()
+    {
+        // Verifies the page never claims a request was sent when Runner could not accept it.
+        var viewModel = new SystemTweaksViewModel(cleanupAsync: _ => Task.FromResult(false), refreshProcessesAsync: () => Task.FromResult(false));
+        viewModel.LoadProfile(new ProfileWorkspace("Test", false));
+
+        await viewModel.RefreshCommand.ExecuteAsync(null);
+        Assert.Equal("Could not refresh because Runner is unavailable.", viewModel.FeedbackText);
+
+        await viewModel.RunRecycleBinCleanupCommand.ExecuteAsync(null);
+        Assert.Equal("Could not start Recycle Bin cleanup because Runner is unavailable.", viewModel.FeedbackText);
     }
 }
