@@ -336,3 +336,8 @@ Let's put things together, Runner instead of sending snapshot to Settings. Now t
 packets module to moule
 
 
+
+
+- Edge optimizer should be listed in startup apps (for runner to act as event loop)
+
+
