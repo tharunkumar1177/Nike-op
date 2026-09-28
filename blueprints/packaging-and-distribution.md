@@ -11,6 +11,7 @@ Each edition installs, starts, updates, and uninstalls as one unit. The Store ed
 The install-layout rules are implemented. No installer or package exists yet. Code inspection on 2026-09-28:
 
 - The `bundle` job in `.github/workflows/buildntest.yml` copies the release Runner, Crosshair, Macro, and EngineSvc executables and the self-contained WinUI publish output into one unpackaged artifact folder. No MSIX manifest, WiX project, signing step, or installer exists.
+- The `release` job in the same workflow runs only for pushed `v*` tags. It rejects tags that do not match the workspace version, zips the unsigned bundle with a SHA-256 checksum file, and publishes a GitHub release. Tags containing a pre-release suffix are published as pre-releases.
 - Runner, the crosshair launcher, and the Macro launcher resolve Settings and the workers only through `crates/core/src/install_layout.rs`. It accepts only bare `.exe` names and joins them to the running image's directory; traversal, absolute, drive-relative, padded, and non-executable names are rejected by unit tests.
 - Runner stops the crosshair and Macro workers through the process handles it owns.
 - The legacy Iced settings crate and `engine_ctl` have been deleted from the workspace.
@@ -82,7 +83,7 @@ CI builds and validates package structure, signatures, and manifest schema. Inst
 
 ## Relevant implementation and tests
 
-- `.github/workflows/buildntest.yml` — current `bundle` job; future MSIX and WiX packaging jobs.
+- `.github/workflows/buildntest.yml` — current `bundle` and tag-driven `release` jobs; future MSIX and WiX packaging jobs.
 - `scripts/publish-winui-settings.ps1` — current WinUI publish beside Runner.
 - `scripts/install-engine-service.ps1` — transitional scheduled-task installer to be replaced by the WiX service registration.
 - `apps/EdgeOptimizer.Settings.WinUI/EdgeOptimizer.Settings.WinUI.csproj` — packaging type and Windows App SDK deployment mode.

@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+    tags:
+      - "v*"
   workflow_dispatch:
 
 permissions:
@@ -160,3 +162,63 @@ jobs:
           name: edge-optimizer-windows-x64
           path: bundle
           if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    needs: [bundle]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify tag matches the workspace version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if ($env:TAG -notmatch '^v(\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?)$') {
+            throw "Tag '$env:TAG' is not of the form vMAJOR.MINOR.PATCH[-PRERELEASE]."
+          }
+          $tagVersion = $Matches[1]
+          $match = Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+          if (-not $match) { throw "Cannot read the workspace version from Cargo.toml." }
+          $workspaceVersion = $match.Matches[0].Groups[1].Value
+          if ($tagVersion -ne $workspaceVersion) {
+            throw "Tag version $tagVersion does not match workspace version $workspaceVersion."
+          }
+
+      - name: Download runnable Windows bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: edge-optimizer-windows-x64
+          path: bundle
+
+      - name: Package release archive
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $archive = "dist/EdgeOptimizer-$env:TAG-windows-x64.zip"
+          Compress-Archive -Path bundle/* -DestinationPath $archive -CompressionLevel Optimal
+          $hash = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLowerInvariant()
+          "$hash  $(Split-Path $archive -Leaf)" | Set-Content -Path dist/SHA256SUMS.txt -Encoding ascii
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          $assets = @("dist/EdgeOptimizer-$env:TAG-windows-x64.zip", "dist/SHA256SUMS.txt")
+          gh release view $env:TAG *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:TAG @assets --clobber
+          } else {
+            $notes = "Unsigned, unpackaged Windows x64 build. Extract the archive and start EdgeOptimizer_Runner.exe. This archive does not register the privileged engine service."
+            $createArgs = @($env:TAG) + $assets + @('--title', "Edge Optimizer $env:TAG", '--notes', $notes, '--generate-notes', '--verify-tag')
+            if ($env:TAG.Contains('-')) { $createArgs += '--prerelease' }
+            gh release create @createArgs
+          }
+          if ($LASTEXITCODE -ne 0) { throw "Publishing release $env:TAG failed." }
