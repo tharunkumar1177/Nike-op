@@ -15,10 +15,7 @@
 
 mod executor;
 mod hotkey_manager;
-mod input_hooks;
-mod input_sender;
 mod ipc_handler;
-mod types;
 
 use anyhow::Result;
 use edge_optimizer_core::macro_config::MacroConfig;

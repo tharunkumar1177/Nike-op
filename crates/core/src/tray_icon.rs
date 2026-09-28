@@ -1,42 +1,26 @@
 /// Minimal System Tray Icon Manager for Runner process
 ///
-/// This module provides a lightweight tray icon with context menu.
-/// It does NOT handle flyout windows - those are owned by the Settings process.
-/// Runner sends IPC messages to Settings to trigger flyout/window actions.
-use anyhow::{anyhow, Result};
+/// This module provides a lightweight tray icon with context menu. Runner
+/// draws its quick flyout itself; this module does not own that window.
+use anyhow::{anyhow, Context, Result};
 use tray_icon::menu::{Menu, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
-/// Load application icon from favicon.ico file
+/// Load application icon from the favicon.ico installed beside Runner
 fn load_app_icon() -> Result<Icon> {
-    // Try multiple paths
-    let paths_to_try = vec![
-        std::env::current_exe()
-            .ok()
-            .and_then(|p| p.parent().map(|p| p.join("favicon.ico"))),
-        Some(std::path::PathBuf::from("favicon.ico")),
-        Some(std::path::PathBuf::from(
-            "X:\\AI_and_Automation\\EdgeOptimizer\\favicon.ico",
-        )),
-    ];
+    let installed_icon = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.join("favicon.ico")))
+        .filter(|path| path.exists());
 
-    for path_opt in paths_to_try {
-        if let Some(path) = path_opt {
-            if path.exists() {
-                let icon_data = std::fs::read(&path)
-                    .map_err(|e| anyhow!("Failed to read favicon.ico: {}", e))?;
+    if let Some(path) = installed_icon {
+        let icon_data = std::fs::read(&path).context("Failed to read favicon.ico")?;
+        let img = image::load_from_memory(&icon_data).context("Failed to decode icon")?;
+        let img = img.resize_exact(16, 16, image::imageops::FilterType::Lanczos3);
+        let rgba = img.to_rgba8();
 
-                // Decode with image crate
-                let img = image::load_from_memory(&icon_data)
-                    .map_err(|e| anyhow!("Failed to decode icon: {}", e))?;
-
-                let img = img.resize_exact(16, 16, image::imageops::FilterType::Lanczos3);
-                let rgba = img.to_rgba8();
-
-                return Icon::from_rgba(rgba.into_raw(), 16, 16)
-                    .map_err(|e| anyhow!("Failed to create icon from image: {:?}", e));
-            }
-        }
+        return Icon::from_rgba(rgba.into_raw(), 16, 16)
+            .map_err(|e| anyhow!("Failed to create icon from image: {:?}", e));
     }
 
     // Fallback: green square
@@ -47,8 +31,7 @@ fn load_app_icon() -> Result<Icon> {
         .map_err(|e| anyhow!("Failed to create fallback icon: {:?}", e))
 }
 
-/// Minimal tray icon manager for Runner process
-/// Only handles icon display and context menu - NO flyout window
+/// Minimal tray icon manager for Runner process: icon, tooltip, and context menu
 pub struct TrayIconManager {
     #[allow(dead_code)]
     tray_icon: TrayIcon,

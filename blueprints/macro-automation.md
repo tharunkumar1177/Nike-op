@@ -1,6 +1,6 @@
 # Macro automation
 
-## Outcome
+## Outcome or responsibility
 
 A player can create profile-scoped keyboard and mouse action sequences, assign non-conflicting shortcuts, and have Runner safely control recording and cancellable playback in an unprivileged Macro worker.
 
@@ -8,7 +8,13 @@ A player can create profile-scoped keyboard and mouse action sequences, assign n
 
 **Status:** Partial
 
-Code inspection on 2026-09-05 confirms Rust domain types for actions, shortcuts, repeat modes, validation, and profile serialization, plus a standalone worker containing global-hotkey and input-simulation code. The WinUI preview supports profile selection, case-insensitive search, create, duplicate, delete, and add/remove-step behavior with unit tests.
+Code inspection on 2026-09-05 confirms Rust domain types for actions, shortcuts, repeat modes, validation, and profile serialization, plus a standalone worker containing global-hotkey and `enigo` input-simulation code. The WinUI preview supports profile selection, case-insensitive search, create, duplicate, delete, add/remove/reorder-step behavior, and a fixed action picker, with unit tests. `MacroValidation` mirrors `MacroDefinition::validate` (non-empty name up to 50 bytes, at least one action, a modifier plus key) and adds the checks below, then blocks saves until they pass:
+
+- case-insensitive name uniqueness;
+- a key for every key action;
+- shortcut keys the worker can register: letters, digits, and F1–F12.
+
+Duplicates receive unique names and no shortcut.
 
 The WinUI editor saves macro names, shortcuts, actions, enablement, and repeat configuration as Runner-owned profile state through the transitional compatibility pipe. Runner starts the unprivileged Macro worker on successful activation and supplies the active configuration; the worker now refreshes global-hotkey registrations when that configuration changes. Recording and test playback remain unavailable. `UntilKeyPressed` still executes once, and cancellation, safe input release, acknowledgements, and deterministic execution tests are absent.
 
@@ -19,7 +25,7 @@ The WinUI editor saves macro names, shortcuts, actions, enablement, and repeat c
 - [IPC and protocol boundary](../architecture.md#ipc-and-protocol-boundary)
 - [Failure and recovery](../architecture.md#failure-and-recovery)
 
-## Feature-specific implications
+## Local rules and implications
 
 ### Component boundaries
 
@@ -52,13 +58,14 @@ Malformed actions, shortcut conflicts, worker failure, or cancellation must fail
 
 - `crates/core/src/macro_config.rs` — Rust action, shortcut, repeat, validation, and configuration types with unit tests.
 - `crates/core/src/input_recorder.rs` — transitional Windows keyboard recording implementation.
-- `crates/core/src/gui/macro_editor.rs` — transitional Iced macro editor.
-- `crates/macro/src` — standalone worker, hotkey listener, input hooks/senders, executor, and private IPC implementation.
+- `crates/core/src/macro_worker.rs` and `crates/macro/src/ipc_handler.rs` — per-session owner-only Macro pipe. Runner verifies that the pipe server is the worker it started.
+- `crates/macro/src` — standalone worker, `global-hotkey` shortcut listener, `enigo` playback executor, and private IPC implementation. The unreferenced low-level hook and `SendInput` modules were removed; recording, when implemented, must be reintroduced behind Runner-issued commands with tests.
 - `apps/EdgeOptimizer.Settings.Core/ViewModels/MacrosViewModel.cs` — profile-scoped macro collection and sequence editing.
 - `crates/core/src/macro_worker.rs` — transitional Runner-owned worker startup and configuration.
-- `tests/EdgeOptimizer.Settings.Core.Tests/MacrosViewModelTests.cs` — filtering, selection, CRUD, duplication, and step mutation tests.
+- `tests/EdgeOptimizer.Settings.Core.Tests/MacrosViewModelTests.cs` — filtering, selection, CRUD, unique duplication, step mutation, and save-blocking validation tests.
+- `apps/EdgeOptimizer.Settings.Core/Models/MacroValidation.cs` and `tests/EdgeOptimizer.Settings.Core.Tests/MacroValidationTests.cs` — client-side mirror of Rust macro validation and the worker's registrable key set.
 
-## Acceptance criteria
+## Acceptance or verification criteria
 
 - [x] Represent keyboard, mouse, delay, shortcut, enablement, and repeat data in the Rust profile model.
 - [x] Validate non-empty macro names, action presence, basic shortcut shape, and case-insensitive name uniqueness.
@@ -74,6 +81,6 @@ Malformed actions, shortcut conflicts, worker failure, or cancellation must fail
 - [ ] Test playback planning with fake clocks and input senders; never inject real input in hosted tests.
 - [ ] Verify hooks, focus interactions, and input cleanup only in an isolated Windows integration environment.
 
-## Remaining gaps
+## Remaining gaps and unknowns
 
 Generated IPC, WinUI recording/capture, cancellation, complete repeat semantics, conflict validation, safe input cleanup, acknowledgements, and deterministic worker tests remain planned. Runner currently uses the worker's transitional Bincode pipe; it must be replaced by generated versioned messages.

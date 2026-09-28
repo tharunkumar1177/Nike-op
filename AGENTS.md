@@ -39,15 +39,13 @@ Do not load every blueprint for an isolated feature task. Read all of `.github/a
 
 ## Repository map
 
-- `crates/core`: shared domain types, persistence, process safety, IPC, and UI
-  support.
-- `crates/settings`: current Rust/Iced settings executable.
+- `crates/core`: shared domain types, persistence, process safety, IPC, pipe
+  security, install layout, and user-context cleanup.
 - `crates/runner`: per-user tray agent, orchestration authority, worker owner,
   and durable-state owner.
 - `crates/crosshair`: unprivileged crosshair worker.
 - `crates/macro`: unprivileged macro worker.
 - `crates/engine_service`: transitional elevated Windows engine service.
-- `crates/engine_ctl`: engine-service control utility.
 - `apps/EdgeOptimizer.Settings.Core`: UI-independent .NET 10 settings logic.
 - `apps/EdgeOptimizer.Settings.WinUI`: active .NET 10 WinUI 3 settings client.
 - `scripts`: Windows service and scheduled-task administration scripts.
@@ -122,9 +120,9 @@ dotnet build .\apps\EdgeOptimizer.Settings.WinUI\EdgeOptimizer.Settings.WinUI.cs
 ```
 
 For a focused Rust change, use `cargo test -p <package>` first. Relevant package
-names include `edge_optimizer_core`, `edge_optimizer_settings`,
-`edge_optimizer_runner`, `edge_optimizer_crosshair`, `edge_optimizer_macro`,
-`edge_optimizer_engine_service`, and `edge_optimizer_engine_ctl`.
+names include `edge_optimizer_core`, `edge_optimizer_runner`,
+`edge_optimizer_crosshair`, `edge_optimizer_macro`, and
+`edge_optimizer_engine_service`.
 
 Release builds use:
 
@@ -159,5 +157,9 @@ run, and call out remaining Windows-only or privileged validation. Mention any
 blueprint status change explicitly.
 
 
-# Don'ts
-- Do not read prompts.md
+# Guardrails
+
+- Do not mock up UI / data, build production grade application
+- Do not use the word 'NIKE' anywhere in the codebase or during file creation
+- If you can't able to access the Github CLI, end the session and I will give you the logs of the CI (Actions)
+- Never read `prompts.md`

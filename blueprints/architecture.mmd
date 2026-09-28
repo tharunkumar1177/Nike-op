@@ -1,0 +1,213 @@
+%% Edge Optimizer - current architecture and architectural flaws
+%%
+%% Evidence basis: static code inspection on 2026-09-28 against architecture.md
+%% and the blueprints/ contracts. No build, service, named-pipe, or GUI behavior
+%% was exercised to produce this diagram.
+%%
+%% Reading guide
+%%   Solid arrows      : implemented runtime paths (transport noted on the edge)
+%%   Dotted arrows     : attack or failure paths that the current code permits
+%%   Fx nodes          : architectural flaws, linked to the component they affect
+%%   Colors            : red = Critical, orange = High, yellow = Medium
+%%
+%% Flaw index (file references are the primary evidence)
+%%   F1  Engine pipe uses a NULL security descriptor, a machine-global name, no
+%%       FILE_FLAG_FIRST_PIPE_INSTANCE and no PIPE_REJECT_REMOTE_CLIENTS
+%%       (crates/core/src/engine_ipc.rs:9, 22-31). Runner connects without
+%%       verifying the server process (crates/runner/src/main.rs:592-612).
+%%   F2  Engine never authenticates its client: no client PID, image, or SID
+%%       check before SYSTEM-level process termination
+%%       (crates/engine_service/src/main.rs:24-48).
+%%   F3  Runner accepts any same-user client on the Settings pipe and persists or
+%%       acts on its messages (crates/core/src/ipc.rs:144-168,
+%%       crates/runner/src/main.rs handle_settings_message).
+%%   F4  Macro worker accepts any same-user client and applies its configuration,
+%%       which drives synthetic input (crates/macro/src/ipc_handler.rs:49-126).
+%%   F5  The privileged engine is a console loop registered as a SYSTEM scheduled
+%%       task, not an SCM service; the installer defaults to a user-writable
+%%       target\release binary (scripts/install-engine-service.ps1:2-11).
+%%   F6  One malformed or failed read ends the engine: recv errors propagate with
+%%       `?` out of main, and the scheduled task has no recovery action
+%%       (crates/engine_service/src/main.rs:30-31).
+%%   F7  Termination targets are raw name strings; the full Profile is sent to the
+%%       SYSTEM process; Runner does not pre-validate; matching is name-only with
+%%       no PID re-check (TOCTOU) and a 10-entry blocklist
+%%       (crates/core/src/orchestration.rs:185-189, crates/core/src/process.rs:35-114).
+%%   F8  Runner performs blocking engine IPC (5 s ping, up to 2 s connect timeout)
+%%       and full process enumeration on its tray message-pump thread
+%%       (crates/runner/src/main.rs:251-266, 386-394, 592-612).
+%%   F9  Workers are not placed in a Job object; they are only killed on Drop, so
+%%       a crashed Runner leaves orphaned overlay and input-injecting workers
+%%       (crates/core/src/crosshair_overlay.rs, crates/core/src/macro_worker.rs).
+%%   F10 Protocol versioning is incomplete: GuiToTray and RunnerToMacroCommand
+%%       carry no version, and Runner and the engine never check
+%%       Envelope.protocol_version (crates/core/src/ipc.rs:34-82, 251-256).
+%%   F11 The C# client hand-writes a Bincode codec that mirrors Rust structs with
+%%       no shared schema; Runner never calls Profile::validate or macro
+%%       validation before persisting
+%%       (TransitionalBincodeRunnerClient.cs:270-421, crates/core/src/profile.rs:27-57).
+%%   F12 The crosshair worker's contract is CLI arguments with an arbitrary image
+%%       path, no dimension or size limit before decode, and no Runner channel;
+%%       validate_crosshair_image is never called at runtime
+%%       (crates/crosshair/src/main.rs:10-36, crates/core/src/image_picker.rs:7).
+%%   F13 Macro playback runs synchronously on the hotkey loop with no
+%%       cancellation, unbounded repeat counts, UntilKeyPressed executing once, and
+%%       Shutdown calling process::exit without releasing held input
+%%       (crates/macro/src/executor.rs:35-96, crates/macro/src/ipc_handler.rs:132-134).
+%%   F14 IdempotencyCache is an unbounded HashSet of client-controlled request IDs
+%%       in both Runner and the engine (crates/core/src/orchestration.rs:212-220).
+%%   F15 Legacy JSON persistence (GamingOptimizer under APPDATA) is still compiled
+%%       and its load errors collapse to defaults during import
+%%       (crates/core/src/config.rs:48-78, crates/runner/src/main.rs:118-122).
+%%   F16 The core crate mixes domain and protocol code with Win32 presentation:
+%%       the deprecated flyout.rs (762 lines), tray_icon, an unused low-level
+%%       keyboard hook (input_recorder.rs), and image_picker (crates/core/src/lib.rs).
+%%   F17 crates/runner/src/main.rs combines the tray pump, Settings IPC server,
+%%       orchestration, engine client, legacy import, and worker lifecycle on one
+%%       thread in one file.
+%%   F18 The Settings client seeds hard-coded profiles before Runner hydration,
+%%       violating the presentation-only, no-mock-data rule
+%%       (MainWindowViewModel.cs:45-48).
+%%   F19 Three divergent key-mapping tables (hotkey registration, playback, and
+%%       recording) allow shortcuts that register but cannot be played back
+%%       (crates/macro/src/hotkey_manager.rs, crates/macro/src/executor.rs,
+%%       crates/core/src/input_recorder.rs).
+
+flowchart TB
+
+    subgraph THREATS["Untrusted local actors"]
+        SameUser["Any process running as<br/>the interactive user"]
+        AnyLocal["Any local process<br/>including other users"]
+    end
+
+    subgraph USERCTX["Interactive-user context - medium integrity, per session"]
+        direction TB
+
+        subgraph SETTINGS["Settings client - .NET 10 WinUI 3"]
+            WinUI["EdgeOptimizer.Settings.WinUI<br/>Views and App host"]
+            SettingsCore["EdgeOptimizer.Settings.Core<br/>ViewModels"]
+            BincodeCS["TransitionalBincodeRunnerClient<br/>hand-written Bincode codec"]
+            PipeIdentity["RunnerPipeIdentity<br/>verifies server image and session"]
+            WinUI --> SettingsCore --> BincodeCS
+            BincodeCS --> PipeIdentity
+        end
+
+        subgraph RUNNER["Runner - per-user tray agent"]
+            RunnerMain["runner main.rs<br/>single-thread Win32 message pump"]
+            Tray["tray_icon.rs"]
+            Orchestration["orchestration.rs<br/>Envelope, IdempotencyCache"]
+            UserCleanup["user_cleanup.rs<br/>interactive-user cleanup"]
+            StateStore["state_store.rs<br/>SQLite, user_version migrations,<br/>transactions, previous.db backup"]
+            LegacyConfig["config.rs<br/>legacy JSON import"]
+            RunnerMain --> Tray
+            RunnerMain --> Orchestration
+            RunnerMain --> UserCleanup
+            RunnerMain --> StateStore
+            RunnerMain --> LegacyConfig
+        end
+
+        subgraph CORELIB["edge_optimizer_core - shared crate"]
+            Domain["profile, macro_config,<br/>process, install_layout"]
+            Protocol["ipc, engine_ipc,<br/>orchestration, pipe_security"]
+            CoreUI["flyout.rs, tray_icon.rs,<br/>image_picker.rs, input_recorder.rs"]
+        end
+
+        subgraph WORKERS["Unprivileged workers"]
+            Crosshair["Crosshair worker<br/>layered overlay window"]
+            Macro["Macro worker<br/>global-hotkey + enigo playback"]
+        end
+
+        StateDB[("LOCALAPPDATA\EdgeOptimizer\state.db")]
+        LegacyJSON[("APPDATA\GamingOptimizer<br/>config.json, profiles.json")]
+    end
+
+    subgraph SYSCTX["LocalSystem context"]
+        Engine["EngineSvc console loop<br/>SYSTEM scheduled task<br/>process termination by name"]
+    end
+
+    Broker["Planned: SCM Privileged Broker<br/>allowlisted typed operations,<br/>authenticated Runner, machine journal"]
+
+    %% Implemented runtime paths
+    PipeIdentity -->|"per-session pipe, owner-only DACL,<br/>first instance, Bincode, 1 MiB"| RunnerMain
+    RunnerMain -->|"spawn from install dir"| WinUI
+    StateStore --> StateDB
+    LegacyConfig -.->|"one-time import"| LegacyJSON
+    RunnerMain -->|"spawn with CLI args:<br/>image path, x, y"| Crosshair
+    RunnerMain -->|"per-session pipe, server PID verified,<br/>unversioned Bincode"| Macro
+    RunnerMain -->|"global pipe, NULL DACL,<br/>blocking call on tray thread"| Engine
+    Engine -.->|"target replacement,<br/>not implemented"| Broker
+
+    RUNNER --> CORELIB
+    SETTINGS -.->|"no shared schema"| Protocol
+    Engine --> Protocol
+
+    %% Attack and failure paths permitted by current code
+    AnyLocal -.->|"connect or pre-create pipe"| Engine
+    SameUser -.->|"connect as fake Settings"| RunnerMain
+    SameUser -.->|"connect as fake Runner"| Macro
+    SameUser -.->|"launch with arbitrary path"| Crosshair
+
+    %% Flaws
+    subgraph CRIT["Critical"]
+        F1["F1 Engine pipe: NULL DACL, global name,<br/>no first-instance, Runner skips server check"]
+        F2["F2 Engine never authenticates the client<br/>before SYSTEM process termination"]
+        F3["F3 Runner trusts any same-user<br/>Settings pipe client"]
+        F4["F4 Macro worker trusts any same-user<br/>client that drives synthetic input"]
+    end
+
+    subgraph HIGH["High"]
+        F5["F5 Scheduled task, not SCM service;<br/>user-writable default binary path"]
+        F6["F6 One bad frame exits the engine;<br/>no recovery action"]
+        F7["F7 Raw name targets, full Profile sent to SYSTEM,<br/>no PID re-check, minimal blocklist"]
+        F8["F8 Blocking engine IPC and process scans<br/>on the tray message pump"]
+        F9["F9 No Job object; workers orphaned<br/>when Runner crashes"]
+        F10["F10 Unversioned messages; protocol_version<br/>never checked on ingress"]
+        F11["F11 Hand-written C# Bincode, no schema;<br/>no validation before persistence"]
+        F12["F12 Crosshair CLI contract, arbitrary path,<br/>unbounded image decode"]
+        F13["F13 Synchronous playback, no cancel,<br/>unbounded repeat, exit without key release"]
+    end
+
+    subgraph MED["Medium"]
+        F14["F14 Unbounded idempotency cache"]
+        F15["F15 Legacy JSON path compiled;<br/>load errors become defaults"]
+        F16["F16 Core crate mixes domain<br/>with Win32 UI and dead modules"]
+        F17["F17 Runner main.rs monolith<br/>on a single thread"]
+        F18["F18 Hard-coded seed profiles<br/>in Settings view model"]
+        F19["F19 Divergent key-mapping tables"]
+    end
+
+    F1 -.- Engine
+    F2 -.- Engine
+    F3 -.- RunnerMain
+    F4 -.- Macro
+    F5 -.- Engine
+    F6 -.- Engine
+    F7 -.- Engine
+    F8 -.- RunnerMain
+    F9 -.- WORKERS
+    F10 -.- Protocol
+    F11 -.- BincodeCS
+    F12 -.- Crosshair
+    F13 -.- Macro
+    F14 -.- Orchestration
+    F15 -.- LegacyConfig
+    F16 -.- CoreUI
+    F17 -.- RunnerMain
+    F18 -.- SettingsCore
+    F19 -.- Macro
+
+    classDef crit fill:#fde2e1,stroke:#c62828,color:#5f0000,stroke-width:2px
+    classDef high fill:#ffe9d1,stroke:#e65100,color:#4a1f00,stroke-width:1.5px
+    classDef med fill:#fff8d6,stroke:#b58900,color:#3d2e00
+    classDef threat fill:#f3e5f5,stroke:#6a1b9a,color:#2e0a3a,stroke-dasharray:4 3
+    classDef privileged fill:#ffebee,stroke:#b71c1c,color:#3b0000,stroke-width:2px
+    classDef planned fill:#eceff1,stroke:#607d8b,color:#263238,stroke-dasharray:6 4
+    classDef store fill:#e3f2fd,stroke:#1565c0,color:#0d2a4a
+
+    class F1,F2,F3,F4 crit
+    class F5,F6,F7,F8,F9,F10,F11,F12,F13 high
+    class F14,F15,F16,F17,F18,F19 med
+    class SameUser,AnyLocal threat
+    class Engine privileged
+    class Broker planned
+    class StateDB,LegacyJSON store

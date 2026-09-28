@@ -1,41 +1,72 @@
-//! Pure Engine command routing separated from Windows side effects.
+//! Pure EngineSvc command routing separated from Windows side effects.
 
-use crate::orchestration::{
-    CleanupKind, EngineToRunnerEvent, Envelope, OperationResult, RunnerToEngineCommand,
+use crate::orchestration::{EngineCommand, EngineEvent, Envelope, PROTOCOL_VERSION};
+use crate::process::{
+    validate_target, ProcessTarget, TargetOutcome, TerminationOutcome, TerminationReport,
+    MAX_TERMINATION_TARGETS,
 };
-use crate::process::KillReport;
+
+/// Identity EngineSvc derived from the pipe itself, never from the message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedClient {
+    pub process_id: u32,
+    pub session_id: u32,
+}
 
 pub trait EngineOperations {
-    fn kill_processes(&mut self, processes: &[String]) -> KillReport;
-    fn run_cleanup(&mut self, request_id: &str, cleanup_kind: CleanupKind) -> OperationResult;
+    /// Re-validate and terminate one target that passed request validation.
+    fn terminate(&mut self, target: &ProcessTarget, client_session: u32) -> TerminationOutcome;
 }
 
 pub fn dispatch_engine_command(
-    request: &Envelope<RunnerToEngineCommand>,
+    request: &Envelope<EngineCommand>,
+    client: &VerifiedClient,
     operations: &mut impl EngineOperations,
-) -> EngineToRunnerEvent {
+) -> EngineEvent {
+    if request.protocol_version != PROTOCOL_VERSION {
+        return EngineEvent::Error {
+            code: "unsupported-protocol".into(),
+            recoverable: false,
+            message: format!(
+                "protocol {} is not supported; expected {}",
+                request.protocol_version, PROTOCOL_VERSION
+            ),
+        };
+    }
     match &request.payload {
-        RunnerToEngineCommand::Ping => EngineToRunnerEvent::Pong,
-        RunnerToEngineCommand::GetCapabilities => EngineToRunnerEvent::Capabilities {
-            cleanup_kinds: vec![CleanupKind::RecycleBin, CleanupKind::BrowserCache],
-            supports_process_kill: true,
+        EngineCommand::Ping => EngineEvent::Pong,
+        EngineCommand::GetCapabilities => EngineEvent::Capabilities {
+            supports_process_termination: true,
         },
-        RunnerToEngineCommand::KillProcesses { processes } => {
-            let report = operations.kill_processes(processes);
-            EngineToRunnerEvent::Result(OperationResult::from_kill_report(
-                request.request_id.clone(),
-                report,
-            ))
+        EngineCommand::TerminateTargets { targets } => {
+            if targets.is_empty() || targets.len() > MAX_TERMINATION_TARGETS {
+                return EngineEvent::Error {
+                    code: "invalid-request".into(),
+                    recoverable: false,
+                    message: format!(
+                        "a request must name between 1 and {MAX_TERMINATION_TARGETS} targets"
+                    ),
+                };
+            }
+            let mut outcomes: Vec<TargetOutcome> = Vec::with_capacity(targets.len());
+            for target in targets {
+                let outcome = if outcomes.iter().any(|seen| seen.target.pid == target.pid) {
+                    TerminationOutcome::Invalid
+                } else if target.pid == client.process_id {
+                    TerminationOutcome::Protected
+                } else {
+                    match validate_target(target) {
+                        Ok(()) => operations.terminate(target, client.session_id),
+                        Err(outcome) => outcome,
+                    }
+                };
+                outcomes.push(TargetOutcome {
+                    target: target.clone(),
+                    outcome,
+                });
+            }
+            EngineEvent::Termination(TerminationReport { outcomes })
         }
-        RunnerToEngineCommand::ApplyProfile { profile } => {
-            let report = operations.kill_processes(&profile.processes_to_kill);
-            let mut result = OperationResult::from_kill_report(request.request_id.clone(), report);
-            result.summary = format!("profile={} {}", profile.name, result.summary);
-            EngineToRunnerEvent::Result(result)
-        }
-        RunnerToEngineCommand::RunCleanup { cleanup_kind } => EngineToRunnerEvent::Result(
-            operations.run_cleanup(&request.request_id, cleanup_kind.clone()),
-        ),
     }
 }
 
@@ -43,38 +74,51 @@ pub fn dispatch_engine_command(
 mod tests {
     use super::*;
     use crate::orchestration::{AuthContext, Envelope};
-    use crate::profile::create_profile;
 
     #[derive(Default)]
     struct FakeOperations {
-        killed_inputs: Vec<Vec<String>>,
-        cleanup_inputs: Vec<CleanupKind>,
+        terminated: Vec<(ProcessTarget, u32)>,
     }
 
     impl EngineOperations for FakeOperations {
-        fn kill_processes(&mut self, processes: &[String]) -> KillReport {
-            self.killed_inputs.push(processes.to_vec());
-            KillReport {
-                killed: processes.to_vec(),
-                failed: Vec::new(),
-                not_found: Vec::new(),
-                blocklist_skipped: Vec::new(),
-            }
-        }
-
-        fn run_cleanup(&mut self, request_id: &str, cleanup_kind: CleanupKind) -> OperationResult {
-            self.cleanup_inputs.push(cleanup_kind);
-            OperationResult {
-                request_id: request_id.to_string(),
-                success: true,
-                summary: "fake cleanup".into(),
-                ..OperationResult::default()
-            }
+        fn terminate(&mut self, target: &ProcessTarget, client_session: u32) -> TerminationOutcome {
+            self.terminated.push((target.clone(), client_session));
+            TerminationOutcome::Terminated
         }
     }
 
-    fn request(payload: RunnerToEngineCommand) -> Envelope<RunnerToEngineCommand> {
+    const CLIENT: VerifiedClient = VerifiedClient {
+        process_id: 900,
+        session_id: 2,
+    };
+
+    fn request(payload: EngineCommand) -> Envelope<EngineCommand> {
         Envelope::with_request_id("test", AuthContext::Unknown, "request-7", payload)
+    }
+
+    fn target(pid: u32, name: &str) -> ProcessTarget {
+        ProcessTarget {
+            pid,
+            creation_time: 42,
+            image_name: name.into(),
+        }
+    }
+
+    fn terminate(targets: Vec<ProcessTarget>, operations: &mut FakeOperations) -> EngineEvent {
+        dispatch_engine_command(
+            &request(EngineCommand::TerminateTargets { targets }),
+            &CLIENT,
+            operations,
+        )
+    }
+
+    fn outcomes(event: EngineEvent) -> Vec<TerminationOutcome> {
+        match event {
+            EngineEvent::Termination(report) => {
+                report.outcomes.into_iter().map(|o| o.outcome).collect()
+            }
+            other => panic!("unexpected event {other:?}"),
+        }
     }
 
     #[test]
@@ -82,65 +126,101 @@ mod tests {
         // Verifies discovery commands return without invoking any operating-system operation.
         let mut operations = FakeOperations::default();
         assert!(matches!(
-            dispatch_engine_command(&request(RunnerToEngineCommand::Ping), &mut operations),
-            EngineToRunnerEvent::Pong
+            dispatch_engine_command(&request(EngineCommand::Ping), &CLIENT, &mut operations),
+            EngineEvent::Pong
         ));
         assert!(matches!(
             dispatch_engine_command(
-                &request(RunnerToEngineCommand::GetCapabilities),
+                &request(EngineCommand::GetCapabilities),
+                &CLIENT,
                 &mut operations
             ),
-            EngineToRunnerEvent::Capabilities {
-                supports_process_kill: true,
-                ..
+            EngineEvent::Capabilities {
+                supports_process_termination: true,
             }
         ));
-        assert!(operations.killed_inputs.is_empty());
-        assert!(operations.cleanup_inputs.is_empty());
+        assert!(operations.terminated.is_empty());
     }
 
     #[test]
-    fn process_intents_are_delegated_to_the_injected_fake() {
-        // Verifies kill and apply-profile commands route fixture names without touching real processes.
+    fn valid_targets_reach_the_fake_with_the_verified_session() {
+        // Verifies the pipe-derived session, not any serialized claim, is passed to termination.
         let mut operations = FakeOperations::default();
-        let names = vec!["fixture.exe".to_string()];
-        let result = dispatch_engine_command(
-            &request(RunnerToEngineCommand::KillProcesses {
-                processes: names.clone(),
-            }),
-            &mut operations,
-        );
-        assert!(matches!(result, EngineToRunnerEvent::Result(result) if result.success));
-
-        let mut profile = create_profile("Gaming".into());
-        profile.processes_to_kill = names.clone();
-        let result = dispatch_engine_command(
-            &request(RunnerToEngineCommand::ApplyProfile { profile }),
-            &mut operations,
-        );
-        assert!(matches!(
-            result,
-            EngineToRunnerEvent::Result(result)
-                if result.summary.starts_with("profile=Gaming")
-        ));
-        assert_eq!(operations.killed_inputs, vec![names.clone(), names]);
+        let result = terminate(vec![target(10, "game.exe")], &mut operations);
+        assert_eq!(outcomes(result), [TerminationOutcome::Terminated]);
+        assert_eq!(operations.terminated, [(target(10, "game.exe"), 2)]);
     }
 
     #[test]
-    fn cleanup_intent_is_delegated_to_the_injected_fake() {
-        // Verifies cleanup routing returns the fake result without deleting any user data.
+    fn protected_and_malformed_targets_never_reach_operations() {
+        // Verifies mixed-case, extensionless, padded, path-bearing, and reserved targets are refused first.
         let mut operations = FakeOperations::default();
-        let result = dispatch_engine_command(
-            &request(RunnerToEngineCommand::RunCleanup {
-                cleanup_kind: CleanupKind::BrowserCache,
-            }),
+        let result = terminate(
+            vec![
+                target(11, "WINLOGON"),
+                target(12, " lsass.EXE "),
+                target(13, r"C:\Windows\explorer.exe"),
+                target(4, "game.exe"),
+                target(CLIENT.process_id, "game.exe"),
+                ProcessTarget {
+                    creation_time: 0,
+                    ..target(14, "game.exe")
+                },
+            ],
             &mut operations,
         );
+        assert_eq!(
+            outcomes(result),
+            [
+                TerminationOutcome::Protected,
+                TerminationOutcome::Protected,
+                TerminationOutcome::Invalid,
+                TerminationOutcome::Protected,
+                TerminationOutcome::Protected,
+                TerminationOutcome::Invalid,
+            ]
+        );
+        assert!(operations.terminated.is_empty());
+    }
+
+    #[test]
+    fn duplicate_pids_are_executed_once() {
+        // Verifies a repeated PID in one request cannot trigger a second termination attempt.
+        let mut operations = FakeOperations::default();
+        let result = terminate(
+            vec![target(20, "game.exe"), target(20, "game.exe")],
+            &mut operations,
+        );
+        assert_eq!(
+            outcomes(result),
+            [TerminationOutcome::Terminated, TerminationOutcome::Invalid]
+        );
+        assert_eq!(operations.terminated.len(), 1);
+    }
+
+    #[test]
+    fn empty_oversized_and_wrong_version_requests_are_rejected() {
+        // Verifies request bounds and protocol versioning are enforced before any target is examined.
+        let mut operations = FakeOperations::default();
         assert!(matches!(
-            result,
-            EngineToRunnerEvent::Result(result)
-                if result.success && result.request_id == "request-7"
+            terminate(Vec::new(), &mut operations),
+            EngineEvent::Error { ref code, .. } if code == "invalid-request"
         ));
-        assert_eq!(operations.cleanup_inputs, vec![CleanupKind::BrowserCache]);
+        let oversized = (0..=MAX_TERMINATION_TARGETS as u32)
+            .map(|pid| target(pid + 100, "game.exe"))
+            .collect();
+        assert!(matches!(
+            terminate(oversized, &mut operations),
+            EngineEvent::Error { ref code, .. } if code == "invalid-request"
+        ));
+        let mut old = request(EngineCommand::TerminateTargets {
+            targets: vec![target(30, "game.exe")],
+        });
+        old.protocol_version = PROTOCOL_VERSION - 1;
+        assert!(matches!(
+            dispatch_engine_command(&old, &CLIENT, &mut operations),
+            EngineEvent::Error { ref code, .. } if code == "unsupported-protocol"
+        ));
+        assert!(operations.terminated.is_empty());
     }
 }

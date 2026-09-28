@@ -1,8 +1,11 @@
+using System.Diagnostics;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
 using System.Text;
 using EdgeOptimizer.Settings.Core.Models;
 using EdgeOptimizer.Settings.Core.Services;
 using Microsoft.UI.Dispatching;
+using Microsoft.Win32.SafeHandles;
 
 namespace EdgeOptimizer.Settings.WinUI.Services;
 
@@ -12,8 +15,8 @@ namespace EdgeOptimizer.Settings.WinUI.Services;
 /// </summary>
 public sealed class TransitionalBincodeRunnerClient : IRunnerClient, IAsyncDisposable
 {
-    private const string PipeName = "EdgeOptimizerIPC";
     private const int MaximumMessageBytes = 1024 * 1024;
+    private const ushort ProtocolVersion = EngineProtocol.ProtocolVersion;
     private readonly DispatcherQueue _dispatcher;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private NamedPipeClientStream? _pipe;
@@ -26,16 +29,28 @@ public sealed class TransitionalBincodeRunnerClient : IRunnerClient, IAsyncDispo
     public event EventHandler<bool>? ConnectionChanged;
     public event EventHandler<RunnerSnapshot>? SnapshotReceived;
     public event EventHandler<string>? StatusReceived;
-    public event EventHandler<IReadOnlyList<ProcessItem>>? ProcessSnapshotReceived;
     public event EventHandler<string?>? ActiveProfileChanged;
     public event EventHandler<RunnerWindowCommand>? WindowCommandReceived;
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
         if (IsConnected) return;
-        _pipe = new NamedPipeClientStream(".", PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
-        await _pipe.ConnectAsync(3000, cancellationToken);
-        _pipe.ReadMode = PipeTransmissionMode.Message;
+        await ReleaseDisconnectedPipeAsync();
+        int sessionId;
+        using (var current = Process.GetCurrentProcess()) sessionId = current.SessionId;
+        var pipe = new NamedPipeClientStream(".", RunnerPipeIdentity.PipeName(sessionId), PipeDirection.InOut, PipeOptions.Asynchronous);
+        try
+        {
+            await pipe.ConnectAsync(3000, cancellationToken);
+            VerifyRunnerServer(pipe, sessionId);
+            pipe.ReadMode = PipeTransmissionMode.Message;
+        }
+        catch
+        {
+            await pipe.DisposeAsync();
+            throw;
+        }
+        _pipe = pipe;
         _lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         Post(() => ConnectionChanged?.Invoke(this, true));
         _ = ReadLoopAsync(_lifetime.Token);
@@ -74,15 +89,12 @@ public sealed class TransitionalBincodeRunnerClient : IRunnerClient, IAsyncDispo
             writer.Write(cleanupKind.Equals("browser-cache", StringComparison.OrdinalIgnoreCase) ? 1u : 0u);
         }, cancellationToken);
 
-    public Task RequestProcessSnapshotAsync(CancellationToken cancellationToken = default) =>
-        SendAsync(writer => writer.Write((uint)6), cancellationToken);
-
     private Task SendOrchestrationAsync(Action<BinaryWriter> writePayload, CancellationToken cancellationToken)
     {
         return SendAsync(writer =>
         {
             writer.Write((uint)5); // GuiToTray::Orchestration
-            writer.Write((ushort)2);
+            writer.Write(ProtocolVersion);
             BincodeCodec.WriteString(writer, "edge-settings-winui");
             BincodeCodec.WriteString(writer, $"winui-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}-{Guid.NewGuid():N}");
             writer.Write((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
@@ -160,18 +172,6 @@ public sealed class TransitionalBincodeRunnerClient : IRunnerClient, IAsyncDispo
             case 6: Post(() => WindowCommandReceived?.Invoke(this, RunnerWindowCommand.Hide)); break;
             case 8: Post(() => WindowCommandReceived?.Invoke(this, RunnerWindowCommand.Exit)); break;
             case 9: ReadOrchestrationEvent(reader); break;
-            case 10:
-                var processCount = checked((int)reader.ReadUInt64());
-                var processes = new List<ProcessItem>(processCount);
-                for (var index = 0; index < processCount; index++)
-                {
-                    var name = BincodeCodec.ReadString(reader);
-                    var cpu = reader.ReadSingle();
-                    var memoryKb = reader.ReadUInt64();
-                    processes.Add(new ProcessItem(name, $"{cpu:F1}%", $"{memoryKb / 1024d:F1} MB", false));
-                }
-                Post(() => ProcessSnapshotReceived?.Invoke(this, processes));
-                break;
             default: throw new InvalidDataException("Runner sent an unknown response.");
         }
     }
@@ -183,7 +183,7 @@ public sealed class TransitionalBincodeRunnerClient : IRunnerClient, IAsyncDispo
         _ = BincodeCodec.ReadString(reader); // request id
         _ = reader.ReadUInt64();
         _ = reader.ReadUInt32(); // serialized identity claim
-        if (version != 2) throw new InvalidDataException($"Unsupported Runner protocol version {version}.");
+        if (version != ProtocolVersion) throw new InvalidDataException($"Unsupported Runner protocol version {version}.");
         switch (reader.ReadUInt32())
         {
             case 0:
@@ -219,10 +219,40 @@ public sealed class TransitionalBincodeRunnerClient : IRunnerClient, IAsyncDispo
         }
     }
 
+    private async Task ReleaseDisconnectedPipeAsync()
+    {
+        var lifetime = _lifetime;
+        var pipe = _pipe;
+        _lifetime = null;
+        _pipe = null;
+        _pendingActivation = null;
+        lifetime?.Cancel();
+        lifetime?.Dispose();
+        if (pipe is not null) await pipe.DisposeAsync();
+    }
+
     private void Post(Action action)
     {
         if (!_dispatcher.TryEnqueue(() => action())) action();
     }
+
+    /// <summary>
+    /// Refuses a pipe that another process created under Runner's name before Runner started.
+    /// </summary>
+    private static void VerifyRunnerServer(NamedPipeClientStream pipe, int sessionId)
+    {
+        if (!GetNamedPipeServerProcessId(pipe.SafePipeHandle, out var serverProcessId))
+            throw new IOException($"Cannot identify the Runner pipe server (Win32 error {Marshal.GetLastPInvokeError()}).");
+
+        using var server = Process.GetProcessById(checked((int)serverProcessId));
+        var serverImage = server.MainModule?.FileName;
+        if (!RunnerPipeIdentity.IsExpectedRunner(serverImage, server.SessionId, AppContext.BaseDirectory, sessionId))
+            throw new UnauthorizedAccessException("The Runner pipe is served by an unexpected process.");
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetNamedPipeServerProcessId(SafePipeHandle pipe, out uint serverProcessId);
 
     public async ValueTask DisposeAsync()
     {
@@ -276,16 +306,14 @@ internal static class BincodeCodec
     public static ProfileWorkspace ReadProfile(BinaryReader reader)
     {
         var profile = new ProfileWorkspace(ReadString(reader), false);
-        profile.Processes.Clear();
         var processCount = checked((int)reader.ReadUInt64());
         for (var index = 0; index < processCount; index++) profile.Processes.Add(new ProcessItem(ReadString(reader), "—", "—", true));
         profile.CrosshairImagePath = ReadOptionString(reader);
-        profile.CrosshairImageName = profile.CrosshairImagePath is null ? "No image selected" : Path.GetFileName(profile.CrosshairImagePath);
+        profile.CrosshairImageName = profile.CrosshairImagePath is null ? ProfileWorkspace.NoImageName : Path.GetFileName(profile.CrosshairImagePath);
         profile.CrosshairXOffset = reader.ReadInt32();
         profile.CrosshairYOffset = reader.ReadInt32();
         profile.OverlayEnabled = reader.ReadBoolean();
         profile.FanBoostEnabled = reader.ReadBoolean();
-        profile.Macros.Clear();
         var macroCount = checked((int)reader.ReadUInt64());
         for (var index = 0; index < macroCount; index++) profile.Macros.Add(ReadMacro(reader));
         return profile;

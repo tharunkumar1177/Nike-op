@@ -59,7 +59,6 @@ jobs:
           Copy-Item target/release/EdgeOptimizer_Crosshair.exe artifacts/runtime/
           Copy-Item target/release/EdgeOptimizer_Macro.exe artifacts/runtime/
           Copy-Item target/release/EdgeOptimizer_EngineSvc.exe artifacts/runtime/
-          Copy-Item target/release/EdgeOptimizer_EngineCtl.exe artifacts/runtime/
 
       - name: Test workspace
         run: |

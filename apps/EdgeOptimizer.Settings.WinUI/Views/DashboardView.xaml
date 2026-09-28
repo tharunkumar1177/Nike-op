@@ -2,28 +2,56 @@
   <ScrollViewer HorizontalScrollBarVisibility="Disabled">
     <StackPanel Spacing="16">
       <Grid ColumnSpacing="14"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
-        <Border Style="{StaticResource CardStyle}"><StackPanel><StackPanel Orientation="Horizontal" Spacing="10"><FontIcon Glyph="&#xE71D;" Foreground="{ThemeResource AppAccentBrush}"/><TextBlock Text="Apps selected" Style="{StaticResource MutedTextStyle}"/></StackPanel><TextBlock Text="{Binding SelectedAppCount}" Style="{StaticResource MetricValueStyle}"/><TextBlock Text="close on activation" Style="{StaticResource MutedTextStyle}" FontSize="12"/></StackPanel></Border>
+        <Border Style="{StaticResource CardStyle}"><StackPanel><StackPanel Orientation="Horizontal" Spacing="10"><FontIcon Glyph="&#xE71D;" Foreground="{ThemeResource AppAccentBrush}"/><TextBlock Text="Apps to close" Style="{StaticResource MutedTextStyle}"/></StackPanel><TextBlock Text="{Binding SelectedAppCount}" Style="{StaticResource MetricValueStyle}"/><TextBlock Text="on activation" Style="{StaticResource MutedTextStyle}" FontSize="12"/></StackPanel></Border>
         <Border Grid.Column="1" Style="{StaticResource CardStyle}"><StackPanel><StackPanel Orientation="Horizontal" Spacing="10"><FontIcon Glyph="&#xF272;" Foreground="{ThemeResource AppAccentBrush}"/><TextBlock Text="Crosshair" Style="{StaticResource MutedTextStyle}"/></StackPanel><TextBlock Text="{Binding CrosshairStatus}" Style="{StaticResource MetricValueStyle}"/><TextBlock Text="overlay state" Style="{StaticResource MutedTextStyle}" FontSize="12"/></StackPanel></Border>
-        <Border Grid.Column="2" Style="{StaticResource CardStyle}"><StackPanel><StackPanel Orientation="Horizontal" Spacing="10"><FontIcon Glyph="&#xE765;" Foreground="{ThemeResource AppAccentBrush}"/><TextBlock Text="Macro trigger" Style="{StaticResource MutedTextStyle}"/></StackPanel><TextBlock Text="{Binding MacroShortcut}" Style="{StaticResource MetricValueStyle}" FontSize="18"/><TextBlock Text="active shortcut" Style="{StaticResource MutedTextStyle}" FontSize="12"/></StackPanel></Border>
-        <Border Grid.Column="3" Style="{StaticResource CardStyle}"><StackPanel><StackPanel Orientation="Horizontal" Spacing="10"><FontIcon Glyph="&#xE73E;" Foreground="{ThemeResource AppSuccessBrush}"/><TextBlock Text="Readiness" Style="{StaticResource MutedTextStyle}"/></StackPanel><TextBlock Text="{Binding ReadinessLabel}" Style="{StaticResource MetricValueStyle}"/><TextBlock Text="profile validation" Style="{StaticResource MutedTextStyle}" FontSize="12"/></StackPanel></Border>
+        <Border Grid.Column="2" Style="{StaticResource CardStyle}"><StackPanel><StackPanel Orientation="Horizontal" Spacing="10"><FontIcon Glyph="&#xE765;" Foreground="{ThemeResource AppAccentBrush}"/><TextBlock Text="Macro trigger" Style="{StaticResource MutedTextStyle}"/></StackPanel><TextBlock Text="{Binding MacroShortcut}" Style="{StaticResource MetricValueStyle}" FontSize="18" TextTrimming="CharacterEllipsis"/><TextBlock Style="{StaticResource MutedTextStyle}" FontSize="12"><Run Text="{Binding MacroCount}"/><Run Text=" macro(s) in profile"/></TextBlock></StackPanel></Border>
+        <Border Grid.Column="3" Style="{StaticResource CardStyle}"><StackPanel><StackPanel Orientation="Horizontal" Spacing="10"><FontIcon Glyph="&#xE73E;" Foreground="{ThemeResource AppSuccessBrush}"/><TextBlock Text="Readiness" Style="{StaticResource MutedTextStyle}"/></StackPanel><TextBlock Text="{Binding ReadinessLabel}" Style="{StaticResource MetricValueStyle}"/><TextBlock Text="{Binding SetupProgressLabel}" Style="{StaticResource MutedTextStyle}" FontSize="12"/></StackPanel></Border>
       </Grid>
 
       <Grid ColumnSpacing="16"><Grid.ColumnDefinitions><ColumnDefinition Width="1.3*"/><ColumnDefinition/></Grid.ColumnDefinitions>
         <Border Style="{StaticResource CardStyle}">
           <Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-            <StackPanel><TextBlock Text="Ready to optimize" Style="{StaticResource SectionTitleStyle}"/><TextBlock Text="Review this profile, then activate it through Runner." Style="{StaticResource MutedTextStyle}" Margin="0,6,0,0"/></StackPanel>
-            <StackPanel Grid.Row="1" Margin="0,28,0,24" Spacing="14">
-              <Grid><TextBlock Text="Profile configuration"/><TextBlock Text="72%" HorizontalAlignment="Right" Foreground="{ThemeResource AppAccentBrush}"/></Grid><ProgressBar Value="72" Height="7"/>
-              <Grid ColumnSpacing="10"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions><Border Style="{StaticResource InsetStyle}"><StackPanel><TextBlock Text="Optimization plan" FontWeight="SemiBold"/><TextBlock Text="Close selected apps, apply policy, then launch the configured overlay." Style="{StaticResource MutedTextStyle}" TextWrapping="Wrap" Margin="0,6,0,0"/></StackPanel></Border><Border Grid.Column="1" Style="{StaticResource InsetStyle}"><StackPanel><TextBlock Text="Safety policy" FontWeight="SemiBold"/><TextBlock Text="Protected processes remain excluded at the Runner and engine boundaries." Style="{StaticResource MutedTextStyle}" TextWrapping="Wrap" Margin="0,6,0,0"/></StackPanel></Border></Grid>
+            <StackPanel><TextBlock Text="Profile setup" Style="{StaticResource SectionTitleStyle}"/><TextBlock Text="Finish these steps, then activate the profile through Runner." Style="{StaticResource MutedTextStyle}" Margin="0,6,0,0"/></StackPanel>
+            <StackPanel Grid.Row="1" Margin="0,24,0,24" Spacing="12">
+              <Grid><TextBlock Text="Configuration"/><TextBlock Text="{Binding SetupProgressLabel}" HorizontalAlignment="Right" Foreground="{ThemeResource AppAccentBrush}"/></Grid>
+              <ProgressBar Value="{Binding SetupProgress}" Maximum="100" Height="7" AutomationProperties.Name="Profile setup progress"/>
+
+              <Border Style="{StaticResource InsetStyle}" Padding="12,10">
+                <Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Grid Width="20"><FontIcon Glyph="&#xE73E;" Foreground="{ThemeResource AppSuccessBrush}" Visibility="{Binding HasSelectedApps, Converter={StaticResource BoolToVisibility}}"/><FontIcon Glyph="&#xEA3A;" Foreground="{ThemeResource AppMutedBrush}" Visibility="{Binding HasSelectedApps, Converter={StaticResource InverseBoolToVisibility}}"/></Grid>
+                  <StackPanel Grid.Column="1"><TextBlock Text="Choose apps to close" FontWeight="SemiBold"/><TextBlock Text="Runner closes them safely when the profile starts." Style="{StaticResource MutedTextStyle}" FontSize="12" TextWrapping="Wrap"/></StackPanel>
+                  <HyperlinkButton Grid.Column="2" Content="Open System Tweaks" Command="{Binding NavigateCommand}" CommandParameter="SystemTweaks" VerticalAlignment="Center"/>
+                </Grid>
+              </Border>
+              <Border Style="{StaticResource InsetStyle}" Padding="12,10">
+                <Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Grid Width="20"><FontIcon Glyph="&#xE73E;" Foreground="{ThemeResource AppSuccessBrush}" Visibility="{Binding HasCrosshair, Converter={StaticResource BoolToVisibility}}"/><FontIcon Glyph="&#xEA3A;" Foreground="{ThemeResource AppMutedBrush}" Visibility="{Binding HasCrosshair, Converter={StaticResource InverseBoolToVisibility}}"/></Grid>
+                  <StackPanel Grid.Column="1"><TextBlock Text="Pick a crosshair image" FontWeight="SemiBold"/><TextBlock Text="The overlay starts only when a PNG is selected and the overlay is on." Style="{StaticResource MutedTextStyle}" FontSize="12" TextWrapping="Wrap"/></StackPanel>
+                  <HyperlinkButton Grid.Column="2" Content="Open Crosshair" Command="{Binding NavigateCommand}" CommandParameter="Crosshair" VerticalAlignment="Center"/>
+                </Grid>
+              </Border>
+              <Border Style="{StaticResource InsetStyle}" Padding="12,10">
+                <Grid ColumnSpacing="12"><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                  <Grid Width="20"><FontIcon Glyph="&#xE73E;" Foreground="{ThemeResource AppSuccessBrush}" Visibility="{Binding HasMacroShortcut, Converter={StaticResource BoolToVisibility}}"/><FontIcon Glyph="&#xEA3A;" Foreground="{ThemeResource AppMutedBrush}" Visibility="{Binding HasMacroShortcut, Converter={StaticResource InverseBoolToVisibility}}"/></Grid>
+                  <StackPanel Grid.Column="1"><TextBlock Text="Assign a macro shortcut" FontWeight="SemiBold"/><TextBlock Text="An enabled macro with a shortcut is registered on activation." Style="{StaticResource MutedTextStyle}" FontSize="12" TextWrapping="Wrap"/></StackPanel>
+                  <HyperlinkButton Grid.Column="2" Content="Open Macros" Command="{Binding NavigateCommand}" CommandParameter="Macros" VerticalAlignment="Center"/>
+                </Grid>
+              </Border>
             </StackPanel>
-            <Button Grid.Row="2" Content="Optimize &amp; launch" HorizontalAlignment="Left" Style="{StaticResource AccentButtonStyle}" IsEnabled="False" ToolTipService.ToolTip="Use Activate profile in the page header." AutomationProperties.AutomationId="Dashboard.Optimize"/>
+            <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="14">
+              <Button Command="{Binding ActivateCommand}" Style="{StaticResource AccentButtonStyle}" AutomationProperties.AutomationId="Dashboard.Activate">
+                <StackPanel Orientation="Horizontal" Spacing="8"><FontIcon Glyph="&#xE768;" FontSize="14"/><TextBlock Text="Save &amp; activate"/></StackPanel>
+              </Button>
+              <TextBlock Text="Every step is optional; activation applies whatever is configured." Style="{StaticResource MutedTextStyle}" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="320"/>
+            </StackPanel>
           </Grid>
         </Border>
         <Border Grid.Column="1" Style="{StaticResource CardStyle}">
           <StackPanel Spacing="12"><TextBlock Text="Quick actions" Style="{StaticResource SectionTitleStyle}"/><TextBlock Text="Jump directly into this profile's configuration." Style="{StaticResource MutedTextStyle}"/>
-            <Button Command="{Binding NavigateCommand}" CommandParameter="Crosshair" HorizontalAlignment="Stretch"><Grid Width="300"><StackPanel Orientation="Horizontal" Spacing="12"><FontIcon Glyph="&#xF272;"/><TextBlock Text="Configure crosshair"/></StackPanel><FontIcon Glyph="&#xE76C;" HorizontalAlignment="Right"/></Grid></Button>
-            <Button Command="{Binding NavigateCommand}" CommandParameter="Macros" HorizontalAlignment="Stretch"><Grid Width="300"><StackPanel Orientation="Horizontal" Spacing="12"><FontIcon Glyph="&#xE765;"/><TextBlock Text="Edit macros"/></StackPanel><FontIcon Glyph="&#xE76C;" HorizontalAlignment="Right"/></Grid></Button>
-            <Button Command="{Binding NavigateCommand}" CommandParameter="SystemTweaks" HorizontalAlignment="Stretch"><Grid Width="300"><StackPanel Orientation="Horizontal" Spacing="12"><FontIcon Glyph="&#xE90F;"/><TextBlock Text="Review system tweaks"/></StackPanel><FontIcon Glyph="&#xE76C;" HorizontalAlignment="Right"/></Grid></Button>
+            <Button Command="{Binding NavigateCommand}" CommandParameter="Crosshair" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Padding="14,10"><Grid><StackPanel Orientation="Horizontal" Spacing="12"><FontIcon Glyph="&#xF272;"/><TextBlock Text="Configure crosshair"/></StackPanel><FontIcon Glyph="&#xE76C;" FontSize="12" HorizontalAlignment="Right"/></Grid></Button>
+            <Button Command="{Binding NavigateCommand}" CommandParameter="Macros" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Padding="14,10"><Grid><StackPanel Orientation="Horizontal" Spacing="12"><FontIcon Glyph="&#xE765;"/><TextBlock Text="Edit macros"/></StackPanel><FontIcon Glyph="&#xE76C;" FontSize="12" HorizontalAlignment="Right"/></Grid></Button>
+            <Button Command="{Binding NavigateCommand}" CommandParameter="SystemTweaks" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Padding="14,10"><Grid><StackPanel Orientation="Horizontal" Spacing="12"><FontIcon Glyph="&#xE90F;"/><TextBlock Text="Review system tweaks"/></StackPanel><FontIcon Glyph="&#xE76C;" FontSize="12" HorizontalAlignment="Right"/></Grid></Button>
+            <Border Style="{StaticResource InsetStyle}" Margin="0,6,0,0"><StackPanel><TextBlock Text="Safety policy" FontWeight="SemiBold"/><TextBlock Text="Protected and critical Windows processes are always excluded by Runner, even if selected here." Style="{StaticResource MutedTextStyle}" TextWrapping="Wrap" Margin="0,6,0,0"/></StackPanel></Border>
           </StackPanel>
         </Border>
       </Grid>

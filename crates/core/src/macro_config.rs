@@ -138,20 +138,15 @@ impl MacroShortcut {
 }
 
 /// How the macro should cycle/repeat
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum CycleMode {
     /// Execute once
+    #[default]
     Once,
     /// Execute a specified number of times
     Count(u32),
     /// Keep executing until the specified key is pressed
     UntilKeyPressed(String),
-}
-
-impl Default for CycleMode {
-    fn default() -> Self {
-        CycleMode::Once
-    }
 }
 
 impl CycleMode {

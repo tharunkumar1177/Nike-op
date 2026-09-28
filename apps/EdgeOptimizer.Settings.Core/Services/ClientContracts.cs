@@ -13,7 +13,6 @@ public interface IRunnerClient
     event EventHandler<bool>? ConnectionChanged;
     event EventHandler<RunnerSnapshot>? SnapshotReceived;
     event EventHandler<string>? StatusReceived;
-    event EventHandler<IReadOnlyList<ProcessItem>>? ProcessSnapshotReceived;
     event EventHandler<string?>? ActiveProfileChanged;
     event EventHandler<RunnerWindowCommand>? WindowCommandReceived;
 
@@ -23,7 +22,6 @@ public interface IRunnerClient
     Task SetOverlayVisibilityAsync(bool visible, CancellationToken cancellationToken = default);
     Task ActivateProfileAsync(ProfileWorkspace profile, CancellationToken cancellationToken = default);
     Task RequestCleanupAsync(string cleanupKind, CancellationToken cancellationToken = default);
-    Task RequestProcessSnapshotAsync(CancellationToken cancellationToken = default);
 }
 
 public sealed record RunnerSnapshot(
@@ -39,10 +37,23 @@ public enum RunnerWindowCommand
     Exit,
 }
 
+/// <summary>Read-only enumeration of processes in the signed-in user's context.</summary>
 public interface IProcessSource
 {
-    IReadOnlyList<ProcessItem> GetProcesses();
+    int CurrentSessionId { get; }
+    uint CurrentProcessId { get; }
+    IReadOnlyList<RunningProcess> Snapshot();
 }
+
+/// <summary>EngineSvc, which terminates specific process instances after re-validating them.</summary>
+public interface IEngineClient
+{
+    /// <exception cref="EngineUnavailableException">EngineSvc is absent, untrusted, or rejected the request.</exception>
+    Task<TerminationReport> TerminateAsync(IReadOnlyList<ProcessTarget> targets, CancellationToken cancellationToken = default);
+}
+
+public sealed class EngineUnavailableException(string message, Exception? innerException = null)
+    : Exception(message, innerException);
 
 public interface ICleanupClient
 {

@@ -33,21 +33,12 @@ use std::fs;
 use std::path::PathBuf;
 
 /// Application configuration storing current state
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct AppConfig {
     /// Name of currently active profile (None = inactive)
     pub active_profile: Option<String>,
     /// Whether overlay is currently visible
     pub overlay_visible: bool,
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        AppConfig {
-            active_profile: None,
-            overlay_visible: false,
-        }
-    }
 }
 
 /// Get the application's data directory

@@ -1,6 +1,6 @@
 # Crosshair overlay
 
-## Outcome
+## Outcome or responsibility
 
 A player can configure one PNG crosshair per profile, preview its position, and have Runner own a click-through, unprivileged overlay worker for the active profile.
 
@@ -19,11 +19,13 @@ WinUI now hydrates and saves the profile's crosshair path, enablement, and offse
 - [IPC and protocol boundary](../architecture.md#ipc-and-protocol-boundary)
 - [Failure and recovery](../architecture.md#failure-and-recovery)
 
-## Feature-specific implications
+## Local rules and implications
 
 ### Component boundaries
 
 Settings edits and previews are presentation concerns. Runner owns the active overlay lifecycle and starts or stops the unprivileged Crosshair worker; neither Settings nor the worker opens durable state.
+
+`crates/core/src/crosshair_overlay.rs` resolves the worker only beside Runner's image, through `install_layout`, as [Packaging and distribution](packaging-and-distribution.md) requires. The returned `OverlayHandle` owns the child process: Runner stops exactly that instance, and dropping the handle also stops it, so no other user's or session's overlay is affected.
 
 ### State ownership and persistence
 
@@ -47,6 +49,7 @@ A missing or invalid image, worker disconnect, or render failure must surface as
 ### Impact checks
 
 - [Settings client](settings-client.md) — owns the WinUI 3 navigation, bindings, preview presentation, and accessibility surface.
+- [Packaging and distribution](packaging-and-distribution.md) — check when worker path resolution or stop behavior changes.
 
 ## Relevant implementation and tests
 
@@ -59,9 +62,10 @@ A missing or invalid image, worker disconnect, or render failure must surface as
 - `apps/EdgeOptimizer.Settings.WinUI/Services/TransitionalBincodeRunnerClient.cs` — temporary WinUI/Runner compatibility transport.
 - `tests/EdgeOptimizer.Settings.Core.Tests/CrosshairViewModelTests.cs` — movement, bounds, file selection, removal, hiding, and reset tests.
 
-## Acceptance criteria
+## Acceptance or verification criteria
 
 - [x] Represent enabled state, image reference, and X/Y offsets per Rust profile.
+- [x] Resolve the worker only beside Runner's image and stop it through Runner's owned process handle.
 - [x] Reject missing, undecodable, or incorrectly sized images in the current Rust image-selection validation path.
 - [ ] Repeat asset validation at the Runner/worker boundary before overlay use.
 - [x] Preserve independent WinUI 3 crosshair preview state when switching profiles.
@@ -74,6 +78,6 @@ A missing or invalid image, worker disconnect, or render failure must surface as
 - [ ] Handle missing assets and worker restart without silently resetting valid profile state.
 - [ ] Verify click-through, topmost, DPI, fullscreen, and multi-monitor behavior in Windows integration tests.
 
-## Remaining gaps
+## Remaining gaps and unknowns
 
 Managed assets, generated contracts, versioned worker updates, shared coordinate semantics, and Windows visual/integration verification remain planned. The current worker receives activation-time command-line configuration and must be replaced by the target lifecycle contract.

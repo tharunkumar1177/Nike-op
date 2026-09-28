@@ -34,25 +34,44 @@ public sealed class CrosshairViewModelTests
         // Verifies cancelling image selection preserves the current crosshair asset.
         var viewModel = CreateViewModel(new FakeFilePicker(null));
         await viewModel.ReplaceImageCommand.ExecuteAsync(null);
-        Assert.Equal("dot-crosshair.png", viewModel.ImageName);
+        Assert.Equal(ProfileWorkspace.NoImageName, viewModel.ImageName);
+        Assert.False(viewModel.HasImage);
+        Assert.False(viewModel.RemoveImageCommand.CanExecute(null));
     }
 
     [Fact]
     public async Task ReplaceRemoveAndResetUpdatePreviewStateAsync()
     {
-        // Verifies image replacement, removal, hiding, and reset mutate only the selected profile preview.
+        // Verifies image replacement, removal, hiding, and reset mutate only the selected profile.
         var viewModel = CreateViewModel(new FakeFilePicker(@"C:\fixtures\precision.png"));
         await viewModel.ReplaceImageCommand.ExecuteAsync(null);
         Assert.Equal("precision.png", viewModel.ImageName);
+        Assert.True(viewModel.HasImage);
+        Assert.True(viewModel.RemoveImageCommand.CanExecute(null));
 
         viewModel.RemoveImageCommand.Execute(null);
-        Assert.Equal("No image selected", viewModel.ImageName);
+        Assert.Equal(ProfileWorkspace.NoImageName, viewModel.ImageName);
         viewModel.HidePreviewCommand.Execute(null);
         Assert.False(viewModel.OverlayEnabled);
 
+        viewModel.XOffset = 12;
         viewModel.ResetCommand.Execute(null);
         Assert.True(viewModel.OverlayEnabled);
-        Assert.Equal("dot-crosshair.png", viewModel.ImageName);
+        Assert.Equal(ProfileWorkspace.NoImageName, viewModel.ImageName);
+        Assert.Null(viewModel.ImagePath);
+        Assert.Equal(0, viewModel.XOffset);
+    }
+
+    [Fact]
+    public async Task SaveFeedbackReflectsTheRunnerResult()
+    {
+        // Verifies the page only reports a successful save when Runner accepted it.
+        var viewModel = new CrosshairViewModel(new FakeFilePicker(null), () => Task.FromResult(false));
+        viewModel.LoadProfile(new ProfileWorkspace("Test", false));
+
+        await ((CommunityToolkit.Mvvm.Input.IAsyncRelayCommand)viewModel.SaveCommand).ExecuteAsync(null);
+
+        Assert.StartsWith("Not saved", viewModel.FeedbackText);
     }
 
     private static CrosshairViewModel CreateViewModel(FakeFilePicker picker)

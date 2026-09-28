@@ -1,4 +1,4 @@
 interface:
   display_name: "Blueprints"
   short_description: "Keep architecture and blueprints aligned"
-  default_prompt: "Use $blueprints to create or update architecture.md and routed blueprints."
+  default_prompt: "Use $Blueprints to create or update architecture.md and routed blueprints."

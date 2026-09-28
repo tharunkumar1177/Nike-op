@@ -18,6 +18,8 @@ public partial class App : Application
         var services = new ServiceCollection();
         services.AddSingleton<IFilePicker, WinUIFilePicker>();
         services.AddSingleton<IRunnerClient>(_ => new TransitionalBincodeRunnerClient(DispatcherQueue.GetForCurrentThread()));
+        services.AddSingleton<IProcessSource, WindowsProcessSource>();
+        services.AddSingleton<IEngineClient, EngineServiceClient>();
         services.AddSingleton<MainWindowViewModel>();
         services.AddSingleton<ShellPage>();
         services.AddSingleton<MainWindow>();
@@ -39,7 +41,10 @@ public partial class App : Application
                 case RunnerWindowCommand.Exit: Window.Close(); break;
             }
         };
+        var viewModel = _services.GetRequiredService<MainWindowViewModel>();
+        Window.Activated += (_, activation) =>
+            viewModel.SetWindowActive(activation.WindowActivationState != WindowActivationState.Deactivated);
         Window.Activate();
-        _ = _services.GetRequiredService<MainWindowViewModel>().InitializeAsync();
+        _ = viewModel.InitializeAsync();
     }
 }

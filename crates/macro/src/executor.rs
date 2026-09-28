@@ -55,8 +55,8 @@ impl MacroExecutor {
 
     /// Execute a sequence of macro actions
     fn execute_actions(&self, actions: &[MacroAction]) -> Result<()> {
-        // Need mutable reference for enigo operations
-        let mut enigo = Enigo::new(&Settings::default()).expect("Failed to create Enigo");
+        let mut enigo = Enigo::new(&Settings::default())
+            .map_err(|e| anyhow::anyhow!("Failed to create input simulator: {e:?}"))?;
 
         for action in actions {
             match action {
