@@ -9,15 +9,33 @@ This document defines cross-cutting contracts for the iterative architecture mig
 - **Settings UI:** an unprivileged, on-demand WinUI presentation client. It is packaged beside Runner as `EdgeOptimizer.Settings.WinUI.exe`. Runner starts it on demand; a transitional Bincode compatibility client currently restores hydration, profile saves, process snapshots, cleanup intents, and activation while the generated Protobuf contract remains planned.
 - **Runner:** the per-user startup agent, tray owner, orchestration authority, process owner, and sole durable-state owner.
 - **Crosshair and Macro workers:** unprivileged native workers started and stopped by Runner.
-- **Privileged Broker:** a minimal Windows SCM service that performs only allowlisted machine-level operations requested by an authenticated Runner. The current scheduled-task EngineSvc is transitional.
+- **Privileged Broker:** a minimal Windows SCM service that performs only allowlisted machine-level operations requested by an authenticated Runner. It exists only in the Full edition (see [Distribution editions and install layout](#distribution-editions-and-install-layout)). The current scheduled-task EngineSvc is transitional.
 
 Dependencies point from clients and workers toward versioned contracts. Presentation clients never call privileged Windows operations or open Runner's database.
+
+## Distribution editions and install layout
+
+This contract is planned. The current CI `bundle` job produces only an unpackaged folder of executables; no installer, package manifest, or startup registration exists yet.
+
+- **Editions.** Two editions are built from the same binaries:
+  - The **Store edition** is a single per-user MSIX package distributed through the Microsoft Store. It contains no Privileged Broker and declares no restricted capability other than `runFullTrust`.
+  - The **Full edition** is a signed, per-machine installer distributed outside the Store. It installs the Privileged Broker as an SCM service with one UAC consent at install time.
+- **Capability discovery.** Runner determines machine-level capability at runtime from an authenticated broker connection, never from a build flag, file presence, or edition claim. When the broker is absent or unavailable, Runner reports each affected operation to clients as unavailable with a reason. This is a normal capability state, not a failure, and it never triggers elevation or a privileged fallback.
+- **Layout.** Runner, Settings, and the workers are installed in one directory; the Full edition adds the broker to it. Every component resolves sibling executables only relative to Runner's own image path, never from the current directory or `PATH`. The install directory is read-only at runtime. Mutable state lives only in the per-user locations defined in [State ownership and persistence](#state-ownership-and-persistence) and, in the Full edition, in the broker's machine journal under `%ProgramData%`.
+- **Store data location.** Inside the MSIX, Windows redirects `%LOCALAPPDATA%` writes to a package-private, per-user location that is deleted on uninstall. Runner and Settings share that view, so the state ownership rules are unchanged.
+- **Exclusivity.** Only one edition may be installed on a machine. Each installer detects the other edition and refuses to proceed until it is removed.
+- **Startup.** Runner starts at user sign-in through the edition's own mechanism: a package startup task for the Store edition and a per-user registration for the Full edition. The user can disable it.
 
 ## State ownership and persistence
 
 Runner exclusively owns `%LOCALAPPDATA%\EdgeOptimizer\state.db`. SQLite schema changes use `PRAGMA user_version` migrations. Profile-list replacement and active-profile changes are transactional. An active profile must reference an existing profile, and deleting that profile clears activation.
 
-At startup Runner restores profiles, active-profile identity, and UI state. Restoration does not replay optimization side effects: process termination, cleanup, and privileged changes require a new explicit command. When the database is empty, Runner may import the legacy `%APPDATA%\GamingOptimizer` JSON files once.
+At startup Runner restores profiles, active-profile identity, and UI state. Restoration does not replay optimization side effects: process termination, cleanup, and privileged changes require a new explicit command. Two startup actions are not replays and are permitted:
+
+- reverting journaled changes, as required by [Reversible system changes](#reversible-system-changes); and
+- running a user-scheduled operation that became due or was missed. The schedule itself is the explicit, previously recorded intent.
+
+When the database is empty, Runner may import the legacy `%APPDATA%\GamingOptimizer` JSON files once.
 
 Crosshair files will be copied into an application-managed assets directory and referenced by asset identity. Portable import/export will use versioned JSON. These asset and export rules are planned, not yet implemented.
 
@@ -29,13 +47,33 @@ The current Rust endpoints still use Serde/Bincode. This is transitional and mus
 
 ## Privilege and identity
 
-The Privileged Broker exposes a minimal allowlist. Its named pipe has an explicit security descriptor, verifies the connecting token/SID, and authorizes each operation independently. User-specific cleanup executes in Runner's interactive-user context; the broker must not infer a user profile from its SYSTEM environment.
+Every operation is classified by execution context before it is implemented:
+
+- **Presentation-only:** Settings.
+- **Interactive-user:** Runner, in the signed-in user's context, with no elevation.
+- **Machine-level:** the Privileged Broker. It is used only when the interactive user cannot perform the operation.
+
+The Privileged Broker exposes a minimal allowlist of named, typed operations. Parameters are enumerations or validated identifiers, never caller-supplied commands, scripts, arbitrary paths, or service names. Anything outside the allowlist is rejected. The allowlist may grow only by adding a named operation with its own validation, authorization, and, where applicable, reversal under [Reversible system changes](#reversible-system-changes).
+
+Its named pipe has an explicit security descriptor. The broker verifies the connecting token/SID and that the client process image is the installed Runner, and it authorizes each operation independently. User-specific cleanup executes in Runner's interactive-user context; the broker must not infer a user profile from its SYSTEM environment.
+
+No component disables, reconfigures, or adds exclusions to Microsoft Defender or other security products. Clients may only direct the user to Windows Security.
 
 The current EngineSvc scheduled task and default-security named pipe do not yet enforce this contract.
 
 ## Process safety
 
-Protected process names are normalized identically for configuration input and discovered executables before comparison. Extensionless, mixed-case, and surrounding-whitespace forms must be blocked. Before termination, the broker will also validate process identity and critical/protected status from the target PID. Name normalization is implemented; PID-level broker validation is planned.
+Protected process names are normalized identically for configuration input and discovered executables before comparison. Extensionless, mixed-case, and surrounding-whitespace forms must be blocked. Before termination, the broker will also validate process identity and critical/protected status from the target PID. Name normalization is implemented; PID-level broker validation is planned. The same protected and critical-process rules apply to any operation that lowers another process's priority or otherwise degrades it, not only to termination.
+
+## Reversible system changes
+
+This contract is planned; no current code changes reversible system state.
+
+Any operation that changes persistent or session-wide system state records the prior value durably before applying the change. This includes process priority, service run state, power plans and core-parking settings, and similar configuration; deleting cache or temporary files is excluded. The component that makes the change owns its journal: Runner stores interactive-user entries in `state.db`, and the Privileged Broker keeps machine-level entries in its machine journal.
+
+Journaled changes are reverted on profile deactivation, on Runner exit, and at the next start of the owning component after a crash or reboot. A revert failure is surfaced per operation, and its journal entry is retained until the revert succeeds or the user explicitly dismisses it. Services are paused by stopping them for the active session only; their configured startup type is never changed.
+
+File deletion is not reversible. It therefore requires explicit user intent, either an immediate command or a user-created schedule, and a preview of what will be removed.
 
 ## Failure and recovery
 
@@ -50,6 +88,8 @@ IPC failures degrade the affected capability and never authorize a privileged fa
 - IPC contract tests must round-trip generated messages in both Rust and C# before WinUI 3 enables Runner-backed behavior.
 - Broker integration tests must cover standard-user access, unauthorized clients, malformed frames, and service restart.
 - Windows UI and service behavior require Windows integration tests; documentation alone never marks them implemented.
+- Reversible changes require unit tests that apply and revert through fake system interfaces, plus isolated Windows integration tests for crash and reboot recovery. They are never exercised against a developer machine.
+- Building an MSIX or installer in CI is compile evidence only. Install, upgrade, repair, uninstall, startup registration, and edition exclusivity require clean Windows virtual machines.
 
 ## Feature blueprints
 

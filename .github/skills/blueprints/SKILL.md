@@ -1,137 +1,191 @@
 ---
 name: blueprints
-description: Create, reorganize, and maintain architecture.md and blueprints/ as a progressively disclosed technical documentation system. Use when an agent must establish a feature-blueprint structure, add or update a feature blueprint, define shared architecture contracts, create manifest-based task routing, split duplicated design notes, align documentation with code and tests, or validate links and dependencies between architecture and feature documentation.
+description: Create and maintain architecture.md and blueprints/ as a progressively disclosed technical documentation system. Use when establishing or changing shared architecture contracts, independently routable responsibility blueprints, manifest-based task routing, documentation migrations, or evidence-backed alignment between design documentation, code, and tests.
 ---
 
 # Blueprints
 
-Maintain a documentation system in which agents load only the context needed for a task while preserving one authoritative source for shared technical contracts.
+Maintain a documentation system that gives each task the smallest sufficient design context while keeping shared technical contracts authoritative and discoverable.
 
-## Workflow
+A blueprint is the focused, independently routable record for a durable responsibility and the significant design context needed to change it safely. A responsibility may be a capability, domain, component, integration, or workflow; it is not created merely because a folder, service, class, or ticket exists.
 
-### 1. Discover the repository contract
+## Evidence rules
 
-1. Read applicable repository instructions before editing.
-2. Locate existing architecture, feature specifications, agent instructions, implementation notes, and test documentation.
-3. Inspect relevant code and tests before asserting current behavior or completion status.
-4. Reuse established documentation paths when they are coherent. When creating the system from scratch, use `architecture.md` and `blueprints/`.
-5. Preserve unrelated user changes.
+- Read applicable repository instructions before editing and preserve unrelated changes.
+- Treat inspected code and tests as authoritative for current behavior.
+- Treat explicit requirements as authoritative for intended behavior.
+- Label conflicts, uncertainty, and unverified claims instead of guessing.
+- Do not mark implementation complete from documentation alone.
 
-Treat verified code and tests as authoritative for current behavior. Treat explicit requirements as authoritative for intended behavior. Label conflicts, uncertainty, and unverified claims instead of guessing.
+## Fast routing
 
-### 2. Separate shared and feature-specific knowledge
+Start with `blueprints/README.md` when it exists.
 
-Put a rule in `architecture.md` when multiple features must obey it or when changing it could affect multiple features. Typical shared material includes:
+| Task type | Load | Then |
+|---|---|---|
+| Local responsibility change | Manifest, one primary blueprint, and its linked architecture anchors | Inspect listed code and tests; load impact checks only when their trigger applies |
+| Shared-contract change | Manifest, complete `architecture.md`, and every manifest entry linked to affected anchors | Inspect and update each consumer |
+| New or uncertain scope | Manifest and relevant code and tests | Classify ownership before creating or expanding documents |
+| Bootstrap, normalization, or migration | Existing design documents, relevant implementation evidence, and affected instructions | Read the templates; read examples only for ambiguous ownership or routing decisions |
 
-- system boundaries and component responsibilities;
-- data ownership and lifecycle;
-- shared representations, invariants, and formulas;
-- cross-cutting workflows;
-- persistence, recovery, concurrency, security, or failure contracts;
-- testing boundaries shared by several features.
+Do not load unrelated blueprints. When routing is uncertain, inspect code and tests before expanding documentation context.
 
-Put material in a *BLUEPRINT* when it describes one user-facing capability or one cohesive feature domain. State how shared contracts affect that feature without copying their definitions.
+## Decide document ownership
 
-Do not make both documents authoritative for the same invariant. Link to an exact architecture heading, then describe only the feature-specific consequence.
+### Shared architecture contracts
 
-### 3. Create or update `architecture.md`
+Put a rule in `architecture.md` when two or more blueprint responsibilities must obey it, or changing it can affect two or more responsibilities. Shared material commonly includes:
 
-1. Give every reusable contract a stable, descriptive heading.
-2. Define each invariant once, including units, coordinate spaces, ownership, ordering, and error semantics where applicable.
-3. Describe cross-cutting flows from input through state changes, side effects, and verification.
-4. Link to the blueprint manifest rather than embedding complete feature specifications.
-5. Keep product wishes and unverified implementation claims distinguishable from enforced contracts.
+- system boundaries and dependency direction;
+- identity, ownership, shared representations, and data lifecycle;
+- persistence, concurrency, recovery, security, and error semantics;
+- cross-cutting flows and verification boundaries.
 
-Read [references/templates.md](references/templates.md) when creating a new architecture document or normalizing an inconsistent one.
+Give every reusable contract a stable, descriptive heading. Define each invariant once, including units, coordinate spaces, ordering, ownership, and failure semantics where applicable.
 
-### 4. Create or update the blueprint manifest
+### Blueprint responsibilities
 
-Use `blueprints/README.md` as the routing manifest.
+Put material in a blueprint when it describes a responsibility-local outcome, rule, acceptance condition, implementation boundary, migration concern, or concrete consequence of a linked shared contract.
 
-For every feature domain, record:
+Create a blueprint only when all responsibility tests pass:
 
-- task concepts and synonyms;
-- the primary blueprint;
-- exact applicable `architecture.md` headings;
-- dependent or affected blueprints to inspect;
+1. **Coherence** — it has one meaningful responsibility or ownership boundary.
+2. **Independent change surface** — it has distinct rules, lifecycle, evidence, implementation or test areas, dependencies, or operational risks.
+3. **Routing value** — a future task can load it without unrelated documentation.
+
+When the purpose is to preserve a design decision, also require that the decision is hard to reverse, non-obvious without context, and involves a genuine trade-off. Record shared decisions in `architecture.md`; record responsibility-local decisions in the relevant blueprint.
+
+Do not create a blueprint for a routine, local, reversible implementation detail; a folder, class, or ticket with no independent responsibility; or a topic whose evidence is too weak to define responsibly.
+
+### Authority boundaries
+
+The manifest is the sole detailed routing and consumer index. `architecture.md` owns shared contracts; blueprints own local implications. Do not duplicate routing tables, make two documents authoritative for the same invariant, or restate a shared contract in a blueprint.
+
+## Documentation model
+
+### `architecture.md`
+
+- Define shared contracts and cross-cutting flows under stable headings.
+- Link to the blueprint manifest instead of embedding complete responsibility specifications.
+- Distinguish enforced contracts, intended requirements, and unverified claims.
+
+Read [references/templates.md](references/templates.md) only when creating `architecture.md` or normalizing an inconsistent structure.
+
+### `blueprints/README.md`
+
+Use the manifest to route tasks by intent, not only by filenames. For every responsibility, record:
+
+- concepts and synonyms;
+- responsibility type;
+- primary blueprint;
+- direct Markdown links to exact applicable `architecture.md` headings;
+- required blueprint dependencies;
+- impact-check blueprints with the condition that triggers each check;
 - principal implementation and test areas.
 
-Route by task intent, not only by filenames, because shared files often implement several features. Prefer feature-domain filenames in kebab case; avoid sequence-based names such as `feature-01.md`.
+Use this table shape:
 
-Define these loading rules in the manifest:
+| Concepts and synonyms | Responsibility type | Primary blueprint | Required architecture contracts | Required blueprints | Impact checks | Principal implementation and tests |
+|---|---|---|---|---|---|---|
 
-1. Load one primary blueprint for an isolated feature task.
-2. Load only its linked architecture sections for ordinary feature work.
-3. Load impact-check blueprints only when the requested change can affect them.
-4. Load the complete architecture and all manifest-listed consumers for structural or cross-cutting contract changes.
-5. Inspect code and tests before expanding context when routing is uncertain.
+Use `None` explicitly when no required or impact-check dependency is known. Prefer responsibility-domain filenames in kebab case; avoid chronological names such as `feature-01.md`.
+
+Define this loading protocol in the manifest:
+
+1. Match task intent and synonyms.
+2. Load one primary blueprint and only its required architecture anchors.
+3. Inspect listed implementation and tests.
+4. Load an impact-check blueprint only if its stated trigger applies.
+5. For a shared-contract or ambiguous change, load the complete architecture and every manifest entry linking the affected anchor.
 6. Do not load unrelated blueprints.
 
-When the repository has agent instruction files and the task includes establishing progressive loading, add a concise equivalent routing protocol to those files. Point them to the manifest; do not duplicate the full routing table.
+When repository instruction files need progressive-loading guidance, add only a concise manifest-first protocol and link to the manifest. Do not duplicate its routing table.
 
-### 5. Create or update each feature blueprint
+### Responsibility blueprints
 
-Keep each blueprint independently useful after its declared dependencies are loaded. Include:
+Keep every blueprint independently useful after its declared dependencies are loaded. Retain these headings even when the content is `None` or an explicit explanation:
 
-1. `Outcome`
+1. `Outcome or responsibility`
 2. `Current verified status`
 3. `Architecture dependencies`
-4. `Feature-specific implications`
+4. `Local rules and implications`
 5. `Related blueprints`
-   - required dependencies;
-   - impact-check dependencies.
+   - `Required`
+   - `Impact checks`
 6. `Relevant implementation and tests`
-7. `Acceptance criteria`
-8. `Remaining gaps`
+7. `Acceptance or verification criteria`
+8. `Remaining gaps and unknowns`
 
-Link architecture dependencies to exact headings. For every dependency, explain its concrete consequence for this feature. Use evidence-based status labels such as `Implemented`, `Partial`, `Planned`, `Deprecated`, or `superseded by {blueprintName}`, and include verification evidence or a verification date when useful.
+Link architecture dependencies to exact headings. For every dependency, explain its concrete consequence without redefining the shared contract. Cite inspected implementation or tests for current-behavior claims, or label the claim unverified.
 
-Read [references/templates.md](references/templates.md) for reusable document shapes and [references/examples.md](references/examples.md) for routing and dependency examples.
+Use these status values consistently:
 
-### 6. Propagate changes deliberately
+- `Implemented` — current behavior is verified by identified code or tests.
+- `Partial` — some criteria are verified and the gaps are named.
+- `Planned` — intended behavior is not yet verified in code.
+- `Unknown` — evidence is insufficient or conflicting.
+- `Deprecated` — retained only for compatibility or migration.
+- `Superseded` — replaced by `[name](relative-path.md)`.
 
-For a feature-only change:
+Read [references/templates.md](references/templates.md) when creating a blueprint or normalizing its structure. Read [references/examples.md](references/examples.md) only for ambiguous classification, routing, migration, or ownership decisions. Do not load either reference for a routine update with a valid manifest route and blueprint.
+
+## Change procedures
+
+### Local responsibility change
 
 1. Update the primary blueprint.
-2. Check only linked architecture contracts and impact-check blueprints.
-3. Update the manifest if concepts, ownership, code areas, or dependencies changed.
+2. Check only its linked architecture contracts and triggered impact checks.
+3. Update the manifest if concepts, ownership, dependencies, or code and test areas changed.
 
-For a shared-contract change:
+### Shared-contract change
 
 1. Update `architecture.md` first.
-2. Find every manifest entry linked to the changed heading.
-3. Inspect and update each consumer's implications, status, criteria, and gaps.
-4. Check implementation and tests for contract drift.
+2. Find every manifest entry linking the changed heading.
+3. Review and update each consumer's implications, status, criteria, and gaps.
+4. Check relevant implementation and tests for contract drift.
 
-For a newly discovered feature:
+### New responsibility
 
-1. Decide whether it is a distinct capability or part of an existing cohesive domain.
-2. Add or extend a blueprint accordingly.
-3. Add task concepts, architecture links, impact checks, and code/test areas to the manifest.
+1. Apply the responsibility tests before creating a document.
+2. Decide whether the material is a new responsibility, part of an existing one, or a shared contract.
+3. Add or extend a blueprint and update the manifest route.
+4. Add required dependencies, conditional impact checks, and verified code and test areas.
 
-### 7. Validate before finishing
+### Bootstrap or normalize
 
-Verify:
+1. Inventory existing architecture, specifications, implementation notes, instructions, code, and tests.
+2. Extract shared contracts into `architecture.md` and group local material by durable responsibility rather than chronology.
+3. Create or normalize blueprints, then build the manifest from verified relationships.
+4. Update inbound links and routing instructions.
+5. Rename, retire, or delete superseded documentation only when the request authorizes the migration.
 
-- all local Markdown links and architecture anchors resolve;
-- every manifest blueprint exists and every blueprint appears in the manifest;
-- every blueprint contains the required contract sections;
-- shared invariants are defined once in `architecture.md`;
-- feature implications do not silently redefine shared contracts;
-- cross-cutting headings list all known consumers;
-- status claims agree with inspected code and tests;
-- renamed or superseded documentation has no stale references;
-- ordinary routing examples load the smallest sufficient document set.
+## Validate before finishing
 
-Run repository-provided documentation checks when available. Otherwise use non-destructive link, heading, reference, and duplicate-content checks appropriate to the environment.
+### Static topology
 
-Report what changed, what was validated, and any claims that remain unverified.
+- Local Markdown paths and anchors resolve.
+- Every non-manifest blueprint appears exactly once in the manifest, and every manifest blueprint exists.
+- Manifest contract links point directly to `architecture.md` anchors.
+- Every blueprint retains the required headings.
+- Renamed, retired, or superseded documents and anchors have no stale inbound links.
+
+### Evidence and semantics
+
+- Claims changed by the task agree with inspected code and tests or are labeled `Planned` or `Unknown`.
+- Each shared invariant has one authoritative definition.
+- Blueprint implications do not redefine their linked contracts.
+- Every manifest-linked consumer of a changed architecture anchor was reviewed.
+
+### Routing behavior
+
+When the change affects routing or structure, test one representative local task, one shared-contract task, and one unrelated task. Confirm that each loads the smallest sufficient document set and that unrelated work does not load a blueprint unless the manifest routes it.
+
+Run repository-provided documentation checks when available. Otherwise use non-destructive link, heading, reference, and duplicate-content checks appropriate to the environment. Report what changed, what was validated, and which claims remain unverified.
 
 ## Guardrails
 
-- Do not invent project-specific architecture, feature status, paths, or test coverage.
-- Do not rename or delete existing documentation unless the request authorizes the migration and references are updated.
-- Do not turn `architecture.md` into a collection of feature specifications.
+- Do not invent project-specific architecture, status, paths, ownership, or test coverage.
+- Do not rename or delete existing documentation without migration authority and updated references.
+- Do not turn `architecture.md` into a collection of responsibility specifications.
 - Do not make blueprints depend on hidden conversational context.
-- Do not mark work complete based only on prose.
-- Do not duplicate the manifest across agent instruction files.
+- Do not duplicate the manifest in repository instruction files.

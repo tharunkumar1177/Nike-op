@@ -1,6 +1,6 @@
 # Macro automation
 
-## Outcome
+## Outcome or responsibility
 
 A player can create profile-scoped keyboard and mouse action sequences, assign non-conflicting shortcuts, and have Runner safely control recording and cancellable playback in an unprivileged Macro worker.
 
@@ -19,7 +19,7 @@ The WinUI editor saves macro names, shortcuts, actions, enablement, and repeat c
 - [IPC and protocol boundary](../architecture.md#ipc-and-protocol-boundary)
 - [Failure and recovery](../architecture.md#failure-and-recovery)
 
-## Feature-specific implications
+## Local rules and implications
 
 ### Component boundaries
 
@@ -52,13 +52,13 @@ Malformed actions, shortcut conflicts, worker failure, or cancellation must fail
 
 - `crates/core/src/macro_config.rs` — Rust action, shortcut, repeat, validation, and configuration types with unit tests.
 - `crates/core/src/input_recorder.rs` — transitional Windows keyboard recording implementation.
-- `crates/core/src/gui/macro_editor.rs` — transitional Iced macro editor.
+- `crates/core/src/gui/macro_editor.rs` — transitional Iced macro editor, scheduled for deletion with the Iced settings client. `input_recorder.rs` is kept for worker-side recording.
 - `crates/macro/src` — standalone worker, hotkey listener, input hooks/senders, executor, and private IPC implementation.
 - `apps/EdgeOptimizer.Settings.Core/ViewModels/MacrosViewModel.cs` — profile-scoped macro collection and sequence editing.
 - `crates/core/src/macro_worker.rs` — transitional Runner-owned worker startup and configuration.
 - `tests/EdgeOptimizer.Settings.Core.Tests/MacrosViewModelTests.cs` — filtering, selection, CRUD, duplication, and step mutation tests.
 
-## Acceptance criteria
+## Acceptance or verification criteria
 
 - [x] Represent keyboard, mouse, delay, shortcut, enablement, and repeat data in the Rust profile model.
 - [x] Validate non-empty macro names, action presence, basic shortcut shape, and case-insensitive name uniqueness.
@@ -74,6 +74,6 @@ Malformed actions, shortcut conflicts, worker failure, or cancellation must fail
 - [ ] Test playback planning with fake clocks and input senders; never inject real input in hosted tests.
 - [ ] Verify hooks, focus interactions, and input cleanup only in an isolated Windows integration environment.
 
-## Remaining gaps
+## Remaining gaps and unknowns
 
 Generated IPC, WinUI recording/capture, cancellation, complete repeat semantics, conflict validation, safe input cleanup, acknowledgements, and deterministic worker tests remain planned. Runner currently uses the worker's transitional Bincode pipe; it must be replaced by generated versioned messages.

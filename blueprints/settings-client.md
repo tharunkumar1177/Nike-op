@@ -1,6 +1,6 @@
 # Settings client
 
-## Outcome
+## Outcome or responsibility
 
 An on-demand, unprivileged WinUI client edits profiles and presents Runner
 state while consuming no memory when closed. It owns only the full Settings
@@ -23,10 +23,15 @@ or foreground this client.
 
 - [Component boundaries](../architecture.md#component-boundaries)
 - [IPC and protocol boundary](../architecture.md#ipc-and-protocol-boundary)
+- [Distribution editions and install layout](../architecture.md#distribution-editions-and-install-layout)
 
-## Feature-specific implications
+## Local rules and implications
 
 WinUI 3 never owns durable state or privileged operations. It requests a snapshot from Runner, submits validated commands, and exits completely when closed.
+
+WinUI never infers the edition itself. It presents each capability as available or unavailable exactly as Runner reports it, shows the reason (for example "requires Full edition"), and disables the matching controls. Planned surfaces are an app-wide **Cleanup** page owned by [Disk cleanup](disk-cleanup.md) and profile-scoped FPS Boost controls owned by [FPS Boost](fps-boost.md).
+
+For the Store edition the client is published framework-dependent on the Windows App SDK runtime package; the Full edition may stay self-contained (see [Packaging and distribution](packaging-and-distribution.md)). The legacy Iced settings executable in `crates/settings` and its `crates/core/src/gui` implementation are superseded by this client and are scheduled for deletion.
 
 Starting a new Settings process is a Runner process-launch operation and does
 not require named-pipe IPC. Once Settings is connected, Runner uses the named
@@ -48,6 +53,9 @@ existing window. Runner never uses WinUI `DispatcherQueue`.
 - [Crosshair overlay](crosshair-overlay.md) — WinUI owns preview presentation but not overlay lifecycle or assets.
 - [Macro automation](macro-automation.md) — WinUI owns editing presentation but not hooks or input execution.
 - [System Tweaks](system-tweaks.md) — WinUI 3 presents choices without performing cleanup, termination, or machine changes.
+- [Disk cleanup](disk-cleanup.md) — check when adding or changing the Cleanup page, schedule editor, preview, or history.
+- [FPS Boost](fps-boost.md) — check when adding FPS Boost controls or result presentation.
+- [Packaging and distribution](packaging-and-distribution.md) — check when publish mode, Windows App SDK deployment, or launch identity changes.
 
 ## Relevant implementation and tests
 
@@ -55,7 +63,7 @@ existing window. Runner never uses WinUI `DispatcherQueue`.
 - `apps/EdgeOptimizer.Settings.WinUI` — active WinUI presentation client.
 - `crates/runner/src/main.rs` — launches the packaged WinUI client.
 
-## Acceptance criteria
+## Acceptance or verification criteria
 
 - [ ] Build on .NET 10 LTS.
 - [x] Hydrate profiles and active state from Runner through the transitional compatibility transport.
@@ -72,7 +80,10 @@ existing window. Runner never uses WinUI `DispatcherQueue`.
   `DispatcherQueue` and activates the existing window.
 - [x] Save supported profile state, activate profiles, and request live process/cleanup operations through Runner's transitional transport.
 - [x] Include WinUI 3 build and logic tests in CI.
+- [ ] Present Runner-reported capability availability and reasons, and disable unavailable controls.
+- [ ] Publish framework-dependent on the Windows App SDK runtime for the Store edition.
+- [ ] Delete the legacy Iced settings executable and `crates/core/src/gui` once no remaining code depends on them.
 
-## Remaining gaps
+## Remaining gaps and unknowns
 
 Generated Protobuf bindings, golden cross-language fixtures, profile rename validation, safe macro recording/test playback, and interactive Windows UI automation remain planned. The current `--flyout-only` path still loads this client and must be removed after Runner's native flyout is verified. The Bincode compatibility client is transitional and must be removed after the shared generated contract lands. GitHub Actions is the build/test authority because the local .NET 10 SDK is unavailable.

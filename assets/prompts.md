@@ -8,12 +8,13 @@ Github Actions CI is the only compile and Build authority, there is no local run
 
 considering the following, create agent file, 
 
+
+# Guardrails
+
 - Don't mock up UI / data, build production grade application
-
-
-## Do not use the word 'NIKE' anywhere in the codebase or during file creation
-## If you can't able to access the Github CLI, end the session and I will give you the logs of the CI (Actions)
-## Never read `prompts.md`
+- Do not use the word 'NIKE' anywhere in the codebase or during file creation
+- If you can't able to access the Github CLI, end the session and I will give you the logs of the CI (Actions)
+- Never read `prompts.md`
 
 
 assemblyDebug
@@ -58,20 +59,56 @@ Do not use the word 'NIKE' anywhere in the codebase
 
 
 
-"Not a real expense? Ignore it" - even for the "income", its showing the "expense" in the review section.
 
----
 
-addressing this problem, add a card right after the 'transaction details' with toggle button for enabling/counting as income/expense.
 
-```
-________________________________________
-|time, direction, Account               |
-|                                       |
-----------------------------------------
-_________________________________________________________
-|(card/mode of transaction)  Income/ Expense <toggle>   |
----------------------------------------------------------
+
+
+
+
 
 
 ```
+Remove-Item -Recurse -Force .git
+
+rmdir /s /q .git
+
+git init
+git log --oneline
+
+```
+
+
+echo "# Nike-op" >> README.md
+git init
+git add README.md
+git commit -m "first commit"
+git branch -M main
+git remote add origin https://github.com/tharunkumar1177/Nike-op.git
+git push -u origin main
+
+
+
+
+
+
+I want to publish this optimizer in MS store. Is there any optimal way of installing this application that put all the core components into one installed exe.
+
+If there is any architectural flaws/quirks - come up with a plan. Only proceeed further if it is approved. 
+you can always propose optimal implementation than the blueprint , only proceed further if user say approved it
+
+This project right now has many flaws, a lot features / functionalities isn't working as expected. instead of directly editing it, ask questions of "how it could have been implemented better?" or "Stick with the existing system."
+
+
+Stick with the existing Privileged broker and cleanup [as described in blueprints].
+For [clean up for browser, system, temp files and so on] clearing system-level files - on a scheduled date and time. I think there is no UI for user to set these things up. so Create one
+
+
+
+
+and installs a network-routing driver (sometimes needing a restart) plus the app running with admin rights.
+
+
+
+
+

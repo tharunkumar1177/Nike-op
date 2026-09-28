@@ -5,49 +5,41 @@ Adapt these shapes to the repository. Preserve established terminology and omit 
 ## `architecture.md`
 
 ```markdown
-# System Architecture
+    # System Architecture
 
-## Purpose and authority
+    ## Purpose and authority
+    State what this document governs and what sources override stale prose.
 
-State what this document governs and what sources override stale prose.
+    ## System boundaries
+    Describe the system, external actors, and excluded responsibilities.
 
-## System boundaries
+    ## Component model
+    Describe stable components, ownership, and dependency direction.
 
-Describe the system, external actors, and excluded responsibilities.
 
-## Component model
+    ## Shared contracts
 
-Describe stable components, ownership, and dependency direction.
+    ### Identity and ownership
+    Define identity, ownership, and lifetime rules.
 
-## Shared contracts
+    ### State lifecycle
+    Define valid states, transitions, and invalidation behavior.
 
-### Identity and ownership
+    ### Data representation
+    Define shared units, schemas, coordinate spaces, or invariants once.
 
-Define identity, ownership, and lifetime rules.
+    ### Error and recovery
+    Define failure visibility, retry, rollback, and recovery behavior.
 
-### State lifecycle
 
-Define valid states, transitions, and invalidation behavior.
+    ## Cross-cutting flows
+    Describe workflows that span multiple feature domains.
 
-### Data representation
+    ## Verification boundaries
+    Describe which test levels establish confidence in shared contracts.
 
-Define shared units, schemas, coordinate spaces, or invariants once.
-
-### Error and recovery
-
-Define failure visibility, retry, rollback, and recovery behavior.
-
-## Cross-cutting flows
-
-Describe workflows that span multiple feature domains.
-
-## Verification boundaries
-
-Describe which test levels establish confidence in shared contracts.
-
-## Feature blueprints
-
-See [the feature-blueprint manifest](feature-blueprints/README.md).
+    ## Feature blueprints
+    See [the feature-blueprint manifest](feature-blueprints/README.md).
 ```
 
 Use headings that reflect the actual system. Stable headings are important because blueprints link to them as contracts.
@@ -55,30 +47,30 @@ Use headings that reflect the actual system. Stable headings are important becau
 ## `blueprints/README.md`
 
 ```markdown
-# Feature Blueprint Manifest
+    # Blueprint Manifest
 
-## Loading protocol
+    ## Loading protocol
 
-1. Match the task by intent and synonyms.
-2. Load the primary blueprint.
-3. Load only its linked architecture sections.
-4. Load impact checks only when the change can affect them.
-5. Expand to the complete architecture for cross-cutting or ambiguous work.
+    1. Match the task by intent and synonyms.
+    2. Load the primary blueprint.
+    3. Load only its linked architecture sections.
+    4. Load impact checks only when the change can affect them.
+    5. Expand to the complete architecture for cross-cutting or ambiguous work.
 
-## Router
+    ## Router
 
-| Task concepts | Primary blueprint | Architecture sections | Impact checks | Principal code and tests |
-|---|---|---|---|---|
-| alert, notification, delivery | [notifications](notifications.md) | [Event model](../architecture.md#event-model), [Delivery guarantees](../architecture.md#delivery-guarantees) | [user preferences](user-preferences.md) when filtering changes | notification service; delivery tests |
-| preference, mute, opt out | [user preferences](user-preferences.md) | [Identity and ownership](../architecture.md#identity-and-ownership) | [notifications](notifications.md) when delivery changes | preference store; policy tests |
+    | Task concepts | Primary blueprint | Architecture sections | Impact checks | Principal code and tests |
+    |---|---|---|---|---|
+    | alert, notification, delivery | [notifications](notifications.md) | [Event model](../architecture.md#event-model), [Delivery guarantees](../architecture.md#delivery-guarantees) | [user preferences](user-preferences.md) when filtering changes | notification service; delivery tests |
+    | preference, mute, opt out | [user preferences](user-preferences.md) | [Identity and ownership](../architecture.md#identity-and-ownership) | [notifications](notifications.md) when delivery changes | preference store; policy tests |
 
-## Status vocabulary
+    ## Status vocabulary
 
-- `Implemented`: verified in current code and tests.
-- `Partial`: some acceptance criteria are verified.
-- `Planned`: required behavior is not implemented.
-- `Deprecated`: retained only for migration or compatibility.
-- `Unknown`: evidence is insufficient; inspect before changing.
+    - `Implemented`: verified in current code and tests.
+    - `Partial`: some acceptance criteria are verified.
+    - `Planned`: required behavior is not implemented.
+    - `Deprecated`: retained only for migration or compatibility.
+    - `Unknown`: evidence is insufficient; inspect before changing.
 ```
 
 Replace the illustrative domains and paths with observed repository concepts.
@@ -86,50 +78,45 @@ Replace the illustrative domains and paths with observed repository concepts.
 ## BLUEPRINT
 
 ```markdown
-# <Feature name>
+    # <Feature name>
 
-## Outcome
+    ## Outcome
+    Describe the user-visible or system-visible result.
 
-Describe the user-visible or system-visible result.
+    ## Current verified status
+    **Status:** <Implemented | Partial | Planned | Deprecated | Unknown>
 
-## Current verified status
+    List concise evidence and the verification date when useful.
 
-**Status:** <Implemented | Partial | Planned | Deprecated | Unknown>
+    ## Architecture dependencies
+    - [Contract heading](../architecture.md#contract-heading)
 
-List concise evidence and the verification date when useful.
+    ## Feature-specific implications
 
-## Architecture dependencies
+    ### Contract heading
+    Explain exactly what the shared contract requires this feature to do. Do not redefine the contract.
 
-- [Contract heading](../architecture.md#contract-heading)
 
-## Feature-specific implications
 
-### Contract heading
+    ## Related blueprints
 
-Explain exactly what the shared contract requires this feature to do. Do not redefine the contract.
+    ### Required
+    - [Dependency](dependency.md) — explain why this feature cannot be understood or changed safely without it.
 
-## Related blueprints
+    ### Impact checks
+    - [Affected feature](affected-feature.md) — explain which changes require checking it.
 
-### Required
 
-- [Dependency](dependency.md) — explain why this feature cannot be understood or changed safely without it.
 
-### Impact checks
+    ## Relevant implementation and tests
+    - `path/to/implementation` — responsibility
+    - `path/to/test` — verified behavior
 
-- [Affected feature](affected-feature.md) — explain which changes require checking it.
+    ## Acceptance criteria
+    - [ ] Observable, testable behavior
 
-## Relevant implementation and tests
-
-- `path/to/implementation` — responsibility
-- `path/to/test` — verified behavior
-
-## Acceptance criteria
-
-- [ ] Observable, testable behavior
-
-## Remaining gaps
-
-- Missing behavior, risk, migration, or unverified assumption
+    ## Remaining gaps
+    - Missing behavior, risk, migration, or unverified assumption
 ```
 
 Use `None` explicitly under a related-blueprint subsection when there are no known entries. This makes the dependency review visible rather than accidental.
@@ -139,7 +126,7 @@ Use `None` explicitly under a related-blueprint subsection when there are no kno
 ```markdown
 For feature or architecture work:
 
-1. Read `feature-blueprints/README.md`.
+1. Read `blueprints/README.md`.
 2. Select the task's primary blueprint by intent.
 3. Read only the architecture headings linked by that blueprint.
 4. Inspect relevant implementation and tests.
