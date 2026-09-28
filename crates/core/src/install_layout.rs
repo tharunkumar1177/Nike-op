@@ -10,6 +10,36 @@ pub const RUNNER_EXE: &str = "EdgeOptimizer_Runner.exe";
 pub const SETTINGS_EXE: &str = "EdgeOptimizer.Settings.WinUI.exe";
 pub const CROSSHAIR_EXE: &str = "EdgeOptimizer_Crosshair.exe";
 pub const MACRO_EXE: &str = "EdgeOptimizer_Macro.exe";
+pub const ENGINE_EXE: &str = "EdgeOptimizer_EngineSvc.exe";
+
+/// Executables EngineSvc accepts as pipe clients.
+pub const ENGINE_CLIENT_EXES: [&str; 2] = [RUNNER_EXE, SETTINGS_EXE];
+
+/// Whether an image path is one of `allowed` directly inside `directory`.
+///
+/// Comparison is case-insensitive, as Windows paths are.
+pub fn is_sibling_image(image: &Path, directory: &Path, allowed: &[&str]) -> bool {
+    let (Some(parent), Some(file_name)) = (image.parent(), image.file_name()) else {
+        return false;
+    };
+    let Some(file_name) = file_name.to_str() else {
+        return false;
+    };
+    let normalize = |path: &Path| {
+        path.to_string_lossy()
+            .trim_end_matches(['\\', '/'])
+            .to_lowercase()
+    };
+    let has_traversal = image
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir));
+    !has_traversal
+        && !normalize(directory).is_empty()
+        && normalize(parent) == normalize(directory)
+        && allowed
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(file_name))
+}
 
 /// Resolve an executable that must exist beside the running image.
 pub fn sibling_executable(file_name: &str) -> Result<PathBuf> {
@@ -55,7 +85,13 @@ mod tests {
     fn accepts_bare_executable_names() {
         // Verifies shipped executable names resolve directly inside the install directory.
         let directory = Path::new(r"C:\Program Files\Edge Optimizer");
-        for name in [RUNNER_EXE, SETTINGS_EXE, CROSSHAIR_EXE, MACRO_EXE] {
+        for name in [
+            RUNNER_EXE,
+            SETTINGS_EXE,
+            CROSSHAIR_EXE,
+            MACRO_EXE,
+            ENGINE_EXE,
+        ] {
             assert_eq!(sibling_in(directory, name).unwrap(), directory.join(name));
         }
         assert!(sibling_in(directory, "Mixed.EXE").is_ok());
@@ -80,5 +116,41 @@ mod tests {
         ] {
             assert!(sibling_in(directory, name).is_err(), "accepted {name:?}");
         }
+    }
+
+    #[test]
+    fn engine_accepts_only_runner_and_settings_beside_it() {
+        // Verifies EngineSvc peers must be the installed Runner or Settings image in its own directory.
+        let directory = Path::new(r"C:\Program Files\Edge Optimizer");
+        let accepted = [
+            r"C:\Program Files\Edge Optimizer\EdgeOptimizer_Runner.exe",
+            r"c:\program files\edge optimizer\edgeoptimizer.settings.winui.EXE",
+        ];
+        for image in accepted {
+            assert!(
+                is_sibling_image(Path::new(image), directory, &ENGINE_CLIENT_EXES),
+                "rejected {image:?}"
+            );
+        }
+        let rejected = [
+            r"C:\Program Files\Edge Optimizer\EdgeOptimizer_Macro.exe",
+            r"C:\Users\Player\Downloads\EdgeOptimizer_Runner.exe",
+            r"C:\Program Files\Edge Optimizer\sub\EdgeOptimizer_Runner.exe",
+            r"C:\Program Files\Edge Optimizer\sub\..\EdgeOptimizer_Runner.exe",
+            r"C:\Program Files\Edge Optimizer Evil\EdgeOptimizer_Runner.exe",
+            "EdgeOptimizer_Runner.exe",
+            "",
+        ];
+        for image in rejected {
+            assert!(
+                !is_sibling_image(Path::new(image), directory, &ENGINE_CLIENT_EXES),
+                "accepted {image:?}"
+            );
+        }
+        assert!(!is_sibling_image(
+            Path::new("EdgeOptimizer_Runner.exe"),
+            Path::new(""),
+            &ENGINE_CLIENT_EXES
+        ));
     }
 }

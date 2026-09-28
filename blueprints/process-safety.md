@@ -8,7 +8,20 @@ Critical Windows processes cannot be selected, terminated, or lowered in priorit
 
 **Status:** Partial
 
-Protected-name normalization and regression tests cover extensionless, mixed-case, and whitespace forms. PID-level critical and protected-process validation is not implemented, and no code changes process priority yet.
+Protected-name normalization and regression tests cover extensionless, mixed-case, and whitespace forms. The protected list now also covers Edge Optimizer's own executables, security products, and a few more shell and session processes.
+
+Targets are `ProcessTarget { pid, creation_time, image_name }`; a bare name or bare PID is never a target.
+
+`process::terminate_target` runs these checks, in order:
+
+1. Request checks: reserved PIDs, malformed or oversized names, protected names, and the caller's own PID.
+2. It opens the PID with a handle that pins the process.
+3. Through that handle it re-checks the creation time and the image name from `QueryFullProcessImageNameW`, rejects a protected actual image, and confirms the process is still running.
+4. It requires the target to be in the requester's session.
+5. It rejects critical processes, failing closed if `IsProcessCritical` cannot be read.
+6. It terminates through the same handle.
+
+These steps have pure-logic unit tests. The live OS path has not been run. No code changes process priority yet.
 
 ## Architecture dependencies
 
@@ -19,11 +32,13 @@ Protected-name normalization and regression tests cover extensionless, mixed-cas
 
 ### Process safety
 
-UI validation is advisory. Whichever component performs a termination or priority change must repeat validation against the resolved PID immediately before the operation. That component is Runner for user-owned processes and the broker for all others. Priority lowering additionally rejects the audio, input, and display processes that [FPS Boost](fps-boost.md) lists.
+UI validation is advisory. The broker performs every termination and must repeat validation against the resolved PID immediately before the operation. Priority lowering additionally rejects the audio, input, and display processes that [FPS Boost](fps-boost.md) lists.
+
+PIDs change every time a process starts, so they are never stored. Profiles store names. Clients resolve names to targets at the moment of use, and trackers hold process handles, never bare PIDs, to follow liveness.
 
 ### Privilege and identity
 
-Runner can end or re-prioritize only processes the interactive user may already control. Anything else goes to the broker as a validated target, never as a raw name or command.
+Runner and Settings send validated targets to the broker, never raw names or commands. The broker limits targets to the requester's session.
 
 ## Related blueprints
 
@@ -39,16 +54,19 @@ None.
 
 ## Relevant implementation and tests
 
-- `crates/core/src/process.rs` — current name matching, process enumeration, termination, and unit tests.
+- `crates/core/src/process.rs` — normalization, protected names, `ProcessTarget`, target resolution, identity verification, validated termination, `WatchedProcess`, and unit tests.
+- `crates/core/src/engine_commands.rs` — request-level rejection before any OS call, with fake-operation tests.
+- `apps/EdgeOptimizer.Settings.Core/Services/ProcessNames.cs` — C# copy of normalization and protected names (advisory).
 
 ## Acceptance or verification criteria
 
 - [x] Block `.exe` and extensionless forms case-insensitively.
 - [x] Ignore surrounding whitespace for safety comparison.
-- [ ] Resolve a requested target to a PID and re-check Windows critical and protected state.
+- [x] Resolve a requested target to a PID plus creation time and re-check identity, session, and Windows critical state through one handle before terminating (logic tests; Windows evidence pending).
 - [ ] Apply the same validation to priority-lowering operations.
-- [ ] Return a structured reason for every skipped PID.
+- [x] Return a structured reason for every skipped PID.
+- [ ] Exercise PID reuse, elevated same-session targets, and critical processes in an isolated Windows environment.
 
 ## Remaining gaps and unknowns
 
-Current termination is still name-based and executes in EngineSvc. Final PID validation belongs to the Runner and broker execution paths. The never-lower process list has not been defined.
+The never-lower process list has not been defined. The Rust and C# protected lists are maintained by hand and must be kept identical; only the Rust list is authoritative. Protected Process Light targets fail with access denied, which is reported as a failure rather than a skip.

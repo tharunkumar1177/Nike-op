@@ -10,7 +10,7 @@ experience; Runner owns the system tray and quick flyout.
 
 **Status:** Partial
 
-WinUI 3 is the active Settings UI and is launched on demand by Runner from the packaged `EdgeOptimizer.Settings.WinUI.exe`. It restores the full profile-scoped Dashboard, Crosshair, Macros, and System Tweaks surfaces and uses a transitional Bincode compatibility client to hydrate Runner state, save profile collections, request live processes and cleanup, and activate profiles. Runner's pipe accepts the client non-blockingly. A Windows CI job tests UI-independent logic, compiles WinUI XAML, and publishes a self-contained client artifact. Generated Protobuf bindings and runtime UI smoke automation remain planned.
+WinUI 3 is the active Settings UI and is launched on demand by Runner from the packaged `EdgeOptimizer.Settings.WinUI.exe`. It restores the full profile-scoped Dashboard, Crosshair, Macros, and System Tweaks surfaces and uses a transitional Bincode compatibility client to hydrate Runner state, save profile collections, request cleanup, and activate profiles. It enumerates processes locally for System Tweaks, idling when that page is hidden or the window is inactive. On activation it sends the selected apps' running instances directly to EngineSvc. Runner's pipe accepts the client non-blockingly. A Windows CI job tests UI-independent logic, compiles WinUI XAML, and publishes a self-contained client artifact. Generated Protobuf bindings and runtime UI smoke automation remain planned.
 
 Code inspection on 2026-09-28 (Core unit tests only; runtime UI behavior is not verified):
 
@@ -22,12 +22,10 @@ Code inspection on 2026-09-28 (Core unit tests only; runtime UI behavior is not 
 - The Dashboard setup checklist is computed from profile state.
 - The Macros editor checks Runner's name, action, and shortcut rules inline before saving.
 
-The current tray single-click path is an exception to the intended on-demand
-boundary: Runner launches Settings with `--flyout-only`, but WinUI ignores that
-mode and loads the full Settings window. The approved target is documented in
-[system tray and quick flyout](tray-and-flyout.md): Runner will own the native
-flyout. A tray double-click or an explicit **Open Settings** action will start
-or foreground this client.
+A tray single-click now opens Runner's native flyout and no longer launches
+Settings (see [system tray and quick flyout](tray-and-flyout.md)). A tray
+double-click or an explicit **Open Settings** action starts or foregrounds this
+client.
 
 ## Architecture dependencies
 
@@ -37,7 +35,7 @@ or foreground this client.
 
 ## Local rules and implications
 
-WinUI 3 never owns durable state or privileged operations. It requests a snapshot from Runner, submits validated commands, and exits completely when closed.
+WinUI 3 never owns durable state. Its only privileged request is EngineSvc's allowlisted `TerminateTargets`, sent after it verifies that SYSTEM owns the engine pipe. It requests a snapshot from Runner, submits validated commands, and exits completely when closed. Background work, currently the System Tweaks process fetcher, must stop when its page is hidden or the window is deactivated or minimized.
 
 WinUI never infers the edition itself. It presents each capability as available or unavailable exactly as Runner reports it, shows the reason (for example "requires Full edition"), and disables the matching controls. Planned surfaces are an app-wide **Cleanup** page owned by [Disk cleanup](disk-cleanup.md) and profile-scoped FPS Boost controls owned by [FPS Boost](fps-boost.md).
 
@@ -84,15 +82,17 @@ existing window. Runner never uses WinUI `DispatcherQueue`.
 - [x] Perform profile collection saves through Runner; generated versioned bindings remain planned.
 - [ ] Exit fully when the window closes.
 - [x] Runner launches the packaged WinUI Settings client.
-- [ ] Tray flyout activation does not launch or initialize the WinUI Settings
-  client.
+- [x] Tray flyout activation does not launch or initialize the WinUI Settings
+  client (code path; Windows evidence pending).
 - [ ] A tray double-click or explicit **Open Settings** action launches the
   full client when it is not running.
 - [ ] When the client is already connected, those actions send
   `BringMainToFront` instead of starting a second Settings process.
 - [ ] The client handles `BringMainToFront` through its WinUI
   `DispatcherQueue` and activates the existing window.
-- [x] Save supported profile state, activate profiles, and request live process/cleanup operations through Runner's transitional transport.
+- [x] Save supported profile state, activate profiles, and request cleanup through Runner's transitional transport.
+- [x] Enumerate processes locally and idle the fetcher when System Tweaks is hidden or the window is inactive.
+- [x] Send activation termination targets directly to EngineSvc, and report when it is unavailable without blocking activation.
 - [x] Include WinUI 3 build and logic tests in CI.
 - [x] Never present placeholder profile, macro, or process data as Runner state; show empty and offline states instead.
 - [x] Surface Runner save and send failures without crashing and without reporting success.
@@ -103,4 +103,4 @@ existing window. Runner never uses WinUI `DispatcherQueue`.
 
 ## Remaining gaps and unknowns
 
-Generated Protobuf bindings, golden cross-language fixtures, profile rename validation, safe macro recording/test playback, and interactive Windows UI automation remain planned. The current `--flyout-only` path still loads this client and must be removed after Runner's native flyout is verified. The Bincode compatibility client is transitional and must be removed after the shared generated contract lands. GitHub Actions is the build/test authority because the local .NET 10 SDK is unavailable.
+Generated Protobuf bindings, broader golden cross-language fixtures, profile rename validation, safe macro recording/test playback, and interactive Windows UI automation remain planned. `App.xaml.cs` still maps the deprecated flyout commands to the main window; Runner no longer sends them. The Bincode compatibility client is transitional and must be removed after the shared generated contract lands. GitHub Actions is the build/test authority because the local .NET 10 SDK is unavailable.

@@ -303,7 +303,36 @@ kimi work - yahoo finance, IMF, world finance, Google scholar, arxiv
 
 
 
-for flyout we'll stick with Direct2D + DirectWrite .
+for  .
 
 ---
+
+
+
+
+
+Bugs found during the UI pass
+
+- New profiles would close apps. Every new profile came with Discord, Chrome, and Spotify pre-selected for closing, plus sample macros. Saving and activating one would have closed those apps without the user choosing them. New profiles now start empty, matching Runner's defaults. - these all are mocked data, fix it. It should show the real time processes in the system.
+
+- Fake data on screen. Three fake game profiles appeared before Runner connected, and the dashboard showed a hardcoded "72%" progress bar. The progress bar is now a real three-step checklist.
+- Crash on a dropped connection. If the connection to Runner dropped during save, activate, or refresh, the error went unhandled and crashed the app. It now shows in the status bar, and pages say "Not saved" rather than claiming success.
+- Refresh lost selections. Refreshing the process list dropped selected apps that weren't running at that moment, which quietly shortened the saved close list. They now stay selected.
+- Saves Runner would reject. Duplicating a macro twice produced duplicate names. The editor now checks Runner's naming, action, and shortcut rules as you type. It also flags shortcut keys the worker can't register, which were previously ignored without warning.
+
+
+
+the system process id changes dynamically right, then how we keep track of these processes (whether it's killed or alive).
+
+
+Let's put things together, Runner instead of sending snapshot to Settings. Now the Setting itself get the processes info. And the settings sends the process list/info to the (directly to) EngineSvc on profile activation to terminate those processes. And the user can also terminate the profile activated processes through the Flyout, since the Runner owns flyout  and the flyout call the EngineSvc to terminate the process.
+
+- Rewrite the flyout with Direct2D + DirectWrite.
+
+- put the processes fetcher to idle, when that window (system tweaks) isn't active.'
+
+
+
+packets module to moule
+
 

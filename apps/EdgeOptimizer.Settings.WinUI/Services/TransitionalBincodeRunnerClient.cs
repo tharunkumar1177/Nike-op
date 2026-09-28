@@ -16,6 +16,7 @@ namespace EdgeOptimizer.Settings.WinUI.Services;
 public sealed class TransitionalBincodeRunnerClient : IRunnerClient, IAsyncDisposable
 {
     private const int MaximumMessageBytes = 1024 * 1024;
+    private const ushort ProtocolVersion = EngineProtocol.ProtocolVersion;
     private readonly DispatcherQueue _dispatcher;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private NamedPipeClientStream? _pipe;
@@ -28,7 +29,6 @@ public sealed class TransitionalBincodeRunnerClient : IRunnerClient, IAsyncDispo
     public event EventHandler<bool>? ConnectionChanged;
     public event EventHandler<RunnerSnapshot>? SnapshotReceived;
     public event EventHandler<string>? StatusReceived;
-    public event EventHandler<IReadOnlyList<ProcessItem>>? ProcessSnapshotReceived;
     public event EventHandler<string?>? ActiveProfileChanged;
     public event EventHandler<RunnerWindowCommand>? WindowCommandReceived;
 
@@ -89,15 +89,12 @@ public sealed class TransitionalBincodeRunnerClient : IRunnerClient, IAsyncDispo
             writer.Write(cleanupKind.Equals("browser-cache", StringComparison.OrdinalIgnoreCase) ? 1u : 0u);
         }, cancellationToken);
 
-    public Task RequestProcessSnapshotAsync(CancellationToken cancellationToken = default) =>
-        SendAsync(writer => writer.Write((uint)6), cancellationToken);
-
     private Task SendOrchestrationAsync(Action<BinaryWriter> writePayload, CancellationToken cancellationToken)
     {
         return SendAsync(writer =>
         {
             writer.Write((uint)5); // GuiToTray::Orchestration
-            writer.Write((ushort)2);
+            writer.Write(ProtocolVersion);
             BincodeCodec.WriteString(writer, "edge-settings-winui");
             BincodeCodec.WriteString(writer, $"winui-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}-{Guid.NewGuid():N}");
             writer.Write((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
@@ -175,18 +172,6 @@ public sealed class TransitionalBincodeRunnerClient : IRunnerClient, IAsyncDispo
             case 6: Post(() => WindowCommandReceived?.Invoke(this, RunnerWindowCommand.Hide)); break;
             case 8: Post(() => WindowCommandReceived?.Invoke(this, RunnerWindowCommand.Exit)); break;
             case 9: ReadOrchestrationEvent(reader); break;
-            case 10:
-                var processCount = checked((int)reader.ReadUInt64());
-                var processes = new List<ProcessItem>(processCount);
-                for (var index = 0; index < processCount; index++)
-                {
-                    var name = BincodeCodec.ReadString(reader);
-                    var cpu = reader.ReadSingle();
-                    var memoryKb = reader.ReadUInt64();
-                    processes.Add(new ProcessItem(name, $"{cpu:F1}%", $"{memoryKb / 1024d:F1} MB", false));
-                }
-                Post(() => ProcessSnapshotReceived?.Invoke(this, processes));
-                break;
             default: throw new InvalidDataException("Runner sent an unknown response.");
         }
     }
@@ -198,7 +183,7 @@ public sealed class TransitionalBincodeRunnerClient : IRunnerClient, IAsyncDispo
         _ = BincodeCodec.ReadString(reader); // request id
         _ = reader.ReadUInt64();
         _ = reader.ReadUInt32(); // serialized identity claim
-        if (version != 2) throw new InvalidDataException($"Unsupported Runner protocol version {version}.");
+        if (version != ProtocolVersion) throw new InvalidDataException($"Unsupported Runner protocol version {version}.");
         switch (reader.ReadUInt32())
         {
             case 0:

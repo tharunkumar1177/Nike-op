@@ -10,6 +10,8 @@ namespace EdgeOptimizer.Settings.Core.ViewModels;
 public sealed class MainWindowViewModel : ObservableObject
 {
     private readonly IRunnerClient _runnerClient;
+    private readonly IProcessSource? _processSource;
+    private readonly IEngineClient? _engineClient;
     private ProfileWorkspace? _selectedProfile;
     private object? _currentPage;
     private string _currentPageLabel = "Dashboard";
@@ -18,9 +20,13 @@ public sealed class MainWindowViewModel : ObservableObject
     private bool _isConnecting;
     private bool _hasHydrated;
 
-    public MainWindowViewModel(IFilePicker filePicker, IRunnerClient runnerClient)
+    /// <param name="processSource">Local process enumeration; absent where it is unsupported.</param>
+    /// <param name="engineClient">EngineSvc; absent in editions that ship without it.</param>
+    public MainWindowViewModel(IFilePicker filePicker, IRunnerClient runnerClient, IProcessSource? processSource = null, IEngineClient? engineClient = null)
     {
         _runnerClient = runnerClient;
+        _processSource = processSource;
+        _engineClient = engineClient;
         NavigateCommand = new RelayCommand<string>(NavigateTo);
         NewProfileCommand = new RelayCommand(NewProfile);
         DuplicateProfileCommand = new RelayCommand(DuplicateProfile, () => SelectedProfile is not null);
@@ -31,7 +37,7 @@ public sealed class MainWindowViewModel : ObservableObject
         Dashboard = new DashboardViewModel(NavigateTo, ActivateProfileCommand);
         Crosshair = new CrosshairViewModel(filePicker, SaveProfilesAsync);
         Macros = new MacrosViewModel(SaveProfilesAsync);
-        SystemTweaks = new SystemTweaksViewModel(SaveProfilesAsync, RequestCleanupAsync, RequestProcessSnapshotAsync);
+        SystemTweaks = new SystemTweaksViewModel(SaveProfilesAsync, RequestCleanupAsync, processSource);
 
         _runnerClient.ConnectionChanged += (_, connected) =>
         {
@@ -40,7 +46,6 @@ public sealed class MainWindowViewModel : ObservableObject
         };
         _runnerClient.SnapshotReceived += (_, snapshot) => ApplySnapshot(snapshot);
         _runnerClient.StatusReceived += (_, status) => StatusMessage = status;
-        _runnerClient.ProcessSnapshotReceived += (_, processes) => SystemTweaks.ApplyProcessSnapshot(processes);
         _runnerClient.ActiveProfileChanged += (_, activeName) => ApplyActiveProfile(activeName);
 
         NavigateTo("Dashboard");
@@ -131,7 +136,11 @@ public sealed class MainWindowViewModel : ObservableObject
         OnPropertyChanged(nameof(IsCrosshairSelected));
         OnPropertyChanged(nameof(IsMacrosSelected));
         OnPropertyChanged(nameof(IsSystemTweaksSelected));
+        SystemTweaks.SetPageActive(IsSystemTweaksSelected);
     }
+
+    /// <summary>Forward window activation so background work idles while Settings is not in use.</summary>
+    public void SetWindowActive(bool active) => SystemTweaks.SetWindowActive(active);
 
     private void ApplySnapshot(RunnerSnapshot snapshot)
     {
@@ -208,22 +217,55 @@ public sealed class MainWindowViewModel : ObservableObject
         if (SelectedProfile is null || !_runnerClient.IsConnected) return;
         var profile = SelectedProfile;
         if (!await SaveProfilesAsync()) return;
+        var closeSummary = await CloseSelectedAppsAsync(profile);
+        SystemTweaks.ReportTermination(closeSummary);
         try
         {
             await _runnerClient.ActivateProfileAsync(profile);
-            StatusMessage = $"Activating {profile.Name}…";
+            StatusMessage = $"{closeSummary} Activating {profile.Name}…";
         }
         catch (Exception error) when (IsRunnerFailure(error))
         {
-            StatusMessage = $"Could not activate {profile.Name}: {error.Message}";
+            StatusMessage = $"{closeSummary} Could not activate {profile.Name}: {error.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Resolves the profile's selected apps to the instances running now and asks
+    /// EngineSvc to close them. EngineSvc re-validates each PID before terminating.
+    /// </summary>
+    private async Task<string> CloseSelectedAppsAsync(ProfileWorkspace profile)
+    {
+        var selected = profile.Processes.Where(process => process.IsSelected).Select(process => process.Name).ToArray();
+        if (selected.Length == 0) return "No apps are selected to close.";
+        if (_processSource is null || _engineClient is null) return "Apps were not closed because the engine service is not available.";
+
+        IReadOnlyList<ProcessTarget> targets;
+        try
+        {
+            var source = _processSource;
+            var snapshot = await Task.Run(() => source.Snapshot());
+            targets = TerminationPlanner.Plan(selected, snapshot, source.CurrentSessionId, source.CurrentProcessId);
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            return $"Apps were not closed because the running apps could not be read: {error.Message}";
+        }
+        if (targets.Count == 0) return "None of the selected apps are running.";
+
+        try
+        {
+            var report = await _engineClient.TerminateAsync(targets);
+            return report.Summary;
+        }
+        catch (EngineUnavailableException error)
+        {
+            return $"Apps were not closed: {error.Message}";
         }
     }
 
     private Task<bool> RequestCleanupAsync(string kind) =>
         SendToRunnerAsync(() => _runnerClient.RequestCleanupAsync(kind), "Cleanup request failed");
-
-    private Task<bool> RequestProcessSnapshotAsync() =>
-        SendToRunnerAsync(() => _runnerClient.RequestProcessSnapshotAsync(), "Process refresh failed");
 
     private async Task<bool> SendToRunnerAsync(Func<Task> send, string failurePrefix)
     {

@@ -193,17 +193,74 @@ public sealed class MainWindowViewModelTests
     }
 
     [Fact]
-    public async Task CleanupAndRefreshAreForwardedToRunner()
+    public async Task CleanupIsForwardedToRunner()
     {
-        // Verifies System Tweaks cleanup and process refresh reach Runner with the transitional cleanup kinds.
+        // Verifies System Tweaks cleanup reaches Runner with the transitional cleanup kinds.
         var (viewModel, runner) = CreateHydrated(new ProfileWorkspace("Test", false));
 
         await viewModel.SystemTweaks.RunRecycleBinCleanupCommand.ExecuteAsync(null);
         await viewModel.SystemTweaks.RunBrowserCacheCleanupCommand.ExecuteAsync(null);
-        await viewModel.SystemTweaks.RefreshCommand.ExecuteAsync(null);
 
         Assert.Equal(new[] { SystemTweaksViewModel.RecycleBinCleanup, SystemTweaksViewModel.BrowserCacheCleanup }, runner.CleanupRequests);
-        Assert.Equal(1, runner.ProcessSnapshotRequests);
+    }
+
+    [Fact]
+    public async Task ActivationClosesRunningSelectedAppsThroughTheEngineThenStartsRunnerWorkers()
+    {
+        // Verifies activation targets each running same-session instance of the selected apps by PID and creation time.
+        var source = new FakeProcessSource(
+            FakeProcessSource.Process(10, "Discord.exe"),
+            FakeProcessSource.Process(11, "chrome.exe"),
+            FakeProcessSource.Process(12, "CHROME.EXE"),
+            FakeProcessSource.Process(13, "Steam.exe"),
+            FakeProcessSource.Process(14, "chrome.exe", session: 2),
+            FakeProcessSource.Process(FakeProcessSource.SelfProcessId, "chrome.exe"));
+        var engine = new FakeEngineClient();
+        var runner = new FakeRunnerClient(true);
+        var viewModel = new MainWindowViewModel(new FakeFilePicker(null), runner, source, engine);
+        runner.RaiseSnapshot(Fixtures.Snapshot(null, Fixtures.ConfiguredProfile()));
+
+        await ((IAsyncRelayCommand)viewModel.ActivateProfileCommand).ExecuteAsync(null);
+
+        var targets = Assert.Single(engine.Requests);
+        Assert.Equal(new uint[] { 10, 11, 12 }, targets.Select(target => target.ProcessId));
+        Assert.All(targets, target => Assert.Equal(1_000 + target.ProcessId, target.CreationTime));
+        Assert.Same(viewModel.SelectedProfile, Assert.Single(runner.ActivatedProfiles));
+        Assert.Equal("Closed 3, already closed 0, skipped 0, failed 0.", viewModel.SystemTweaks.FeedbackText);
+    }
+
+    [Fact]
+    public async Task UnavailableEngineStillActivatesAndExplainsWhyAppsStayedOpen()
+    {
+        // Verifies EngineSvc absence degrades only app closing and never blocks crosshair or macro activation.
+        var engine = new FakeEngineClient { Unavailable = true };
+        var runner = new FakeRunnerClient(true);
+        var viewModel = new MainWindowViewModel(new FakeFilePicker(null), runner, new FakeProcessSource(FakeProcessSource.Process(10, "Discord.exe")), engine);
+        runner.RaiseSnapshot(Fixtures.Snapshot(null, Fixtures.ConfiguredProfile()));
+
+        await ((IAsyncRelayCommand)viewModel.ActivateProfileCommand).ExecuteAsync(null);
+
+        Assert.Single(runner.ActivatedProfiles);
+        Assert.StartsWith("Apps were not closed", viewModel.SystemTweaks.FeedbackText);
+        Assert.StartsWith("Apps were not closed", viewModel.StatusMessage);
+    }
+
+    [Fact]
+    public void ProcessFetchingFollowsSystemTweaksNavigationAndWindowActivation()
+    {
+        // Verifies the fetcher idles on other pages and while the Settings window is inactive.
+        var runner = new FakeRunnerClient(true);
+        var viewModel = new MainWindowViewModel(new FakeFilePicker(null), runner, new FakeProcessSource(), new FakeEngineClient());
+        runner.RaiseSnapshot(Fixtures.Snapshot(null, new ProfileWorkspace("Test", false)));
+        Assert.False(viewModel.SystemTweaks.IsMonitoring);
+
+        viewModel.NavigateTo("SystemTweaks");
+        Assert.True(viewModel.SystemTweaks.IsMonitoring);
+        viewModel.SetWindowActive(false);
+        Assert.False(viewModel.SystemTweaks.IsMonitoring);
+        viewModel.SetWindowActive(true);
+        viewModel.NavigateTo("Macros");
+        Assert.False(viewModel.SystemTweaks.IsMonitoring);
     }
 
     private static MainWindowViewModel CreateViewModel() =>

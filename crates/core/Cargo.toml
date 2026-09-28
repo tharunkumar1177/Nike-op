@@ -6,7 +6,6 @@ edition.workspace = true
 [dependencies]
 tray-icon = { workspace = true }
 image = { workspace = true }
-sysinfo = { workspace = true }
 parking_lot = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

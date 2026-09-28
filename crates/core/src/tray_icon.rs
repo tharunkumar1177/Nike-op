@@ -1,8 +1,7 @@
 /// Minimal System Tray Icon Manager for Runner process
 ///
-/// This module provides a lightweight tray icon with context menu.
-/// It does NOT handle flyout windows - those are owned by the Settings process.
-/// Runner sends IPC messages to Settings to trigger flyout/window actions.
+/// This module provides a lightweight tray icon with context menu. Runner
+/// draws its quick flyout itself; this module does not own that window.
 use anyhow::{anyhow, Context, Result};
 use tray_icon::menu::{Menu, MenuId, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
@@ -32,8 +31,7 @@ fn load_app_icon() -> Result<Icon> {
         .map_err(|e| anyhow!("Failed to create fallback icon: {:?}", e))
 }
 
-/// Minimal tray icon manager for Runner process
-/// Only handles icon display and context menu - NO flyout window
+/// Minimal tray icon manager for Runner process: icon, tooltip, and context menu
 pub struct TrayIconManager {
     #[allow(dead_code)]
     tray_icon: TrayIcon,

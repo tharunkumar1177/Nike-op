@@ -3,8 +3,9 @@
 //! Shared functionality for all Edge Optimizer processes
 //!
 //! Architecture:
-//! - Runner process owns the system tray (uses tray_icon module)
+//! - Runner process owns the system tray (uses tray_icon module) and its quick flyout
 //! - The WinUI Settings client talks to Runner over the ipc pipe
+//! - Runner and Settings request process termination from EngineSvc over engine_ipc
 //! - Workers are resolved beside Runner through install_layout
 
 pub mod common_apps;
@@ -12,7 +13,6 @@ pub mod config;
 pub mod crosshair_overlay;
 pub mod engine_commands;
 pub mod engine_ipc;
-pub mod flyout;
 pub mod image_picker;
 pub mod input_recorder;
 pub mod install_layout;

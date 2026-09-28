@@ -46,8 +46,6 @@ pub enum GuiToTray {
     Shutdown,
     /// Versioned orchestration command envelope
     Orchestration(Envelope<SettingsToRunnerCommand>),
-    /// Request a read-only process list for the System Tweaks UI.
-    RequestProcessSnapshot,
 }
 
 /// Messages from Runner to Settings
@@ -59,17 +57,17 @@ pub enum TrayToGui {
         active_profile: Option<String>,
         overlay_visible: bool,
     },
-    /// User selected a profile from tray
+    /// Runner activated a profile from its quick flyout
     ActivateProfile(String),
-    /// User deactivated profile from tray
+    /// Runner deactivated the active profile from its quick flyout
     DeactivateProfile,
     /// User toggled overlay from tray
     ToggleOverlay,
     /// User requested to open settings/GUI
     OpenSettings,
-    /// User single-clicked tray icon - show flyout window
+    /// Deprecated: Runner owns the quick flyout and never sends this.
     ShowFlyout,
-    /// User clicked away or toggled - hide flyout window
+    /// Deprecated: Runner owns the quick flyout and never sends this.
     HideFlyout,
     /// User double-clicked tray icon - bring main window to front
     BringMainToFront,
@@ -77,15 +75,6 @@ pub enum TrayToGui {
     Exit,
     /// Versioned orchestration event envelope
     OrchestrationEvent(Envelope<RunnerToSettingsEvent>),
-    /// Read-only process metrics; process selection remains profile state.
-    ProcessSnapshot(Vec<ProcessSnapshotEntry>),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProcessSnapshotEntry {
-    pub name: String,
-    pub cpu_percent: f32,
-    pub memory_kb: u64,
 }
 
 /// Named Pipe Server (Runner side)
@@ -311,20 +300,12 @@ mod tests {
     }
 
     #[test]
-    fn process_snapshot_round_trips_without_enumerating_live_processes() {
-        // Verifies process metrics cross the transitional pipe using deterministic fixture data only.
-        let message = TrayToGui::ProcessSnapshot(vec![ProcessSnapshotEntry {
-            name: "fixture.exe".into(),
-            cpu_percent: 1.5,
-            memory_kb: 2048,
-        }]);
-        let encoded = bincode::serialize(&message).unwrap();
-        let decoded: TrayToGui = bincode::deserialize(&encoded).unwrap();
-        assert!(matches!(
-            decoded,
-            TrayToGui::ProcessSnapshot(entries)
-                if entries.len() == 1 && entries[0].name == "fixture.exe"
-        ));
+    fn runner_activation_notices_keep_the_tags_settings_decodes() {
+        // Verifies flyout-driven activation notices keep Bincode tags 1 and 2 that the WinUI client maps.
+        let activated = bincode::serialize(&TrayToGui::ActivateProfile("Gaming".into())).unwrap();
+        assert_eq!(activated[..4], [1, 0, 0, 0]);
+        let deactivated = bincode::serialize(&TrayToGui::DeactivateProfile).unwrap();
+        assert_eq!(deactivated, [2, 0, 0, 0]);
     }
 
     #[test]

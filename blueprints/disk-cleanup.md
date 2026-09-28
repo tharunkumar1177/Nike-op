@@ -20,6 +20,8 @@ Code inspection on 2026-09-28, after the Phase 2 runtime changes:
 
 No schedule is stored, and no size preview, cleanup history, or other categories exist.
 
+**Architecture change (2026-09-28):** scheduled cleanup is now assigned to EngineSvc (see [Privileged broker](privileged-broker.md)). Nothing has been moved yet: on-demand Recycle Bin and browser-cache cleanup still run in Runner, and the scheduling rules below that name Runner as the scheduler must be revised before implementation.
+
 ## Architecture dependencies
 
 - [Privilege and identity](../architecture.md#privilege-and-identity)
@@ -129,5 +131,6 @@ A failure in one category never stops the others and is never reported as overal
 - The exact per-vendor shader cache folders and per-browser cache folder names must be confirmed against current browser and driver releases before implementation.
 - Thumbnail and icon caches are usually held open by Explorer, so most runs will report them as skipped. Whether to offer an Explorer restart is undecided.
 - Whether Windows Update cache cleanup should wait while an update download is in progress needs evaluation.
+- With EngineSvc as the scheduler, it needs a way to resolve user-specific locations for the right user without a connected client, and never from its SYSTEM environment. It also needs a rule for where the schedule is stored, since `state.db` is Runner-owned. Both are undecided.
 - Whether deleting existing files under the real `%LOCALAPPDATA%` from inside the Store MSIX affects the real files or only the package-private view is unverified, and must be tested before browser-cache cleanup is enabled in the Store edition.
 - Real Recycle Bin and browser-cache deletion has not been exercised; only fixture-based tests exist.

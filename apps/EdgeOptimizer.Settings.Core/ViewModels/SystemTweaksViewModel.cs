@@ -3,6 +3,7 @@ using System.Windows.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EdgeOptimizer.Settings.Core.Models;
+using EdgeOptimizer.Settings.Core.Services;
 
 namespace EdgeOptimizer.Settings.Core.ViewModels;
 
@@ -11,19 +12,31 @@ public sealed class SystemTweaksViewModel : ObservableObject
     public const string RecycleBinCleanup = "recycle-bin";
     public const string BrowserCacheCleanup = "browser-cache";
     public const string NotRunningMetric = "—";
+    public static readonly TimeSpan DefaultRefreshInterval = TimeSpan.FromSeconds(3);
 
     private readonly Func<Task<bool>> _saveAsync;
     private readonly Func<string, Task<bool>> _cleanupAsync;
-    private readonly Func<Task<bool>> _refreshProcessesAsync;
+    private readonly IProcessSource? _processSource;
+    private readonly TimeSpan _refreshInterval;
+    private readonly ProcessSampler _sampler = new(Environment.ProcessorCount);
     private ProfileWorkspace? _profile;
     private string _processFilter = string.Empty;
-    private string _feedbackText = "Choose the apps Runner should close when this profile is activated.";
+    private string _feedbackText = "Choose the apps to close when this profile is activated.";
+    private bool _isPageActive;
+    private bool _isWindowActive = true;
+    private bool _isRefreshing;
+    private CancellationTokenSource? _monitoring;
 
-    public SystemTweaksViewModel(Func<Task<bool>>? saveAsync = null, Func<string, Task<bool>>? cleanupAsync = null, Func<Task<bool>>? refreshProcessesAsync = null)
+    public SystemTweaksViewModel(
+        Func<Task<bool>>? saveAsync = null,
+        Func<string, Task<bool>>? cleanupAsync = null,
+        IProcessSource? processSource = null,
+        TimeSpan? refreshInterval = null)
     {
         _saveAsync = saveAsync ?? (() => Task.FromResult(true));
         _cleanupAsync = cleanupAsync ?? (_ => Task.FromResult(true));
-        _refreshProcessesAsync = refreshProcessesAsync ?? (() => Task.FromResult(true));
+        _processSource = processSource;
+        _refreshInterval = refreshInterval ?? DefaultRefreshInterval;
         RefreshCommand = new AsyncRelayCommand(RefreshProcessesAsync);
         RestoreDefaultsCommand = new RelayCommand(RestoreDefaults);
         ClearSelectionCommand = new RelayCommand(ClearSelection);
@@ -45,8 +58,11 @@ public sealed class SystemTweaksViewModel : ObservableObject
     public string SelectionSummary => $"{SelectedCount} selected";
     public bool IsProcessListEmpty => !FilteredProcesses.Any();
     public string ProcessListEmptyText => string.IsNullOrWhiteSpace(ProcessFilter)
-        ? "No apps listed yet. Select Refresh to load the apps that are running now."
+        ? _processSource is null ? "Running apps can't be listed on this system." : "Loading the apps that are running now…"
         : $"No apps match \"{ProcessFilter}\".";
+
+    /// <summary>True while the running-app list refreshes periodically.</summary>
+    public bool IsMonitoring => _monitoring is not null;
 
     public string ProcessFilter
     {
@@ -90,35 +106,117 @@ public sealed class SystemTweaksViewModel : ObservableObject
         OnPropertyChanged(nameof(FanBoostEnabled));
         OnPropertyChanged(nameof(RecycleBinEnabled));
         OnPropertyChanged(nameof(BrowserCacheEnabled));
+        if (IsMonitoring) _ = RefreshOnceAsync(CancellationToken.None);
     }
 
+    /// <summary>Call when the System Tweaks page is shown or navigated away from.</summary>
+    public void SetPageActive(bool active)
+    {
+        _isPageActive = active;
+        UpdateMonitoring();
+    }
+
+    /// <summary>Call when the Settings window is activated, deactivated, or minimized.</summary>
+    public void SetWindowActive(bool active)
+    {
+        _isWindowActive = active;
+        UpdateMonitoring();
+    }
+
+    public void ReportTermination(string summary) => FeedbackText = summary;
+
     /// <summary>
-    /// Replaces the listed processes with Runner's snapshot. Selected apps that are not
-    /// running stay selected, so a refresh never silently shrinks the profile's close list.
+    /// Merges a snapshot into the listed processes. Existing rows update in place;
+    /// selected apps that are not running stay selected, so a refresh never silently
+    /// shrinks the profile's close list.
     /// </summary>
     public void ApplyProcessSnapshot(IReadOnlyList<ProcessItem> processes)
     {
         if (_profile is null) return;
-        var selected = _profile.Processes.Where(process => process.IsSelected).Select(process => process.Name).ToList();
-        var running = processes.Select(process => process.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var selectedSet = selected.ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var process in _profile.Processes) process.PropertyChanged -= ProcessPropertyChanged;
-        _profile.Processes.Clear();
+        var incoming = new Dictionary<string, ProcessItem>(StringComparer.Ordinal);
+        foreach (var process in processes) incoming.TryAdd(ProcessNames.Normalize(process.Name), process);
 
-        foreach (var name in selected.Where(name => !running.Contains(name)))
-            AddProcess(new ProcessItem(name, NotRunningMetric, NotRunningMetric, true));
+        var membershipChanged = false;
+        foreach (var existing in _profile.Processes.ToList())
+        {
+            var key = ProcessNames.Normalize(existing.Name);
+            if (incoming.Remove(key, out var fresh))
+            {
+                existing.UpdateMetrics(fresh.Cpu, fresh.Memory);
+            }
+            else if (existing.IsSelected)
+            {
+                existing.UpdateMetrics(NotRunningMetric, NotRunningMetric);
+            }
+            else
+            {
+                existing.PropertyChanged -= ProcessPropertyChanged;
+                _profile.Processes.Remove(existing);
+                membershipChanged = true;
+            }
+        }
         foreach (var process in processes)
         {
-            process.IsSelected = selectedSet.Contains(process.Name);
-            AddProcess(process);
+            if (!incoming.Remove(ProcessNames.Normalize(process.Name))) continue;
+            process.IsSelected = false;
+            process.PropertyChanged += ProcessPropertyChanged;
+            _profile.Processes.Add(process);
+            membershipChanged = true;
         }
-        NotifyProcessList();
+        if (membershipChanged) NotifyProcessList();
     }
 
-    private void AddProcess(ProcessItem process)
+    private void UpdateMonitoring()
     {
-        process.PropertyChanged += ProcessPropertyChanged;
-        _profile!.Processes.Add(process);
+        var shouldRun = _isPageActive && _isWindowActive && _processSource is not null;
+        if (shouldRun == IsMonitoring) return;
+        if (shouldRun)
+        {
+            _monitoring = new CancellationTokenSource();
+            _ = MonitorAsync(_monitoring.Token);
+        }
+        else
+        {
+            _monitoring!.Cancel();
+            _monitoring.Dispose();
+            _monitoring = null;
+        }
+        OnPropertyChanged(nameof(IsMonitoring));
+    }
+
+    private async Task MonitorAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await RefreshOnceAsync(cancellationToken);
+            using var timer = new PeriodicTimer(_refreshInterval);
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+                await RefreshOnceAsync(cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+    }
+
+    private async Task<bool> RefreshOnceAsync(CancellationToken cancellationToken)
+    {
+        if (_processSource is null || _profile is null || _isRefreshing) return false;
+        _isRefreshing = true;
+        try
+        {
+            var source = _processSource;
+            var snapshot = await Task.Run(() => source.Snapshot(), cancellationToken);
+            if (cancellationToken.IsCancellationRequested) return false;
+            ApplyProcessSnapshot(_sampler.Sample(snapshot, source.CurrentSessionId, DateTimeOffset.UtcNow));
+            return true;
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            FeedbackText = $"Could not read the running apps: {error.Message}";
+            return false;
+        }
+        finally
+        {
+            _isRefreshing = false;
+        }
     }
 
     private bool FilterProcess(ProcessItem process) =>
@@ -173,8 +271,11 @@ public sealed class SystemTweaksViewModel : ObservableObject
 
     private async Task RefreshProcessesAsync()
     {
-        FeedbackText = await _refreshProcessesAsync()
-            ? "Requested the running apps from Runner."
-            : "Could not refresh because Runner is unavailable.";
+        if (_processSource is null)
+        {
+            FeedbackText = "Running apps can't be listed on this system.";
+            return;
+        }
+        if (await RefreshOnceAsync(CancellationToken.None)) FeedbackText = "Updated the running apps.";
     }
 }

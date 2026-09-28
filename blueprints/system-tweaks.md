@@ -2,22 +2,22 @@
 
 ## Outcome or responsibility
 
-A player can configure profile-scoped process termination and fan options, understand their safety and privilege requirements, preview the activation plan, and receive structured results when Runner applies explicitly authorized operations. Reversible performance adjustments belong to [FPS Boost](fps-boost.md), and cleanup belongs to [Disk cleanup](disk-cleanup.md).
+A player can configure profile-scoped process termination and fan options, understand their safety and privilege requirements, and receive structured per-process results when EngineSvc closes the selected apps on activation or when the player ends them from Runner's quick flyout. Reversible performance adjustments belong to [FPS Boost](fps-boost.md), and cleanup belongs to [Disk cleanup](disk-cleanup.md).
 
 ## Current verified status
 
 **Status:** Partial
 
-Code inspection on 2026-09-05 confirmed:
+Code inspection on 2026-09-28. Unit tests were written, but CI has not run them yet. No termination has been exercised on Windows.
 
-- Rust profile storage for selected process names and a fan-speed flag;
-- process-name normalization and protected-name tests;
-- Runner-to-Engine command routing with fake-operation tests; and
-- transitional Recycle Bin and browser-cache commands.
+- Profiles store selected process *names*. A name is resolved to specific instances only at the moment of use. Each instance is identified by PID plus creation time (`ProcessTarget`), so a recycled PID never matches.
+- **Settings enumerates processes itself.** `WindowsProcessSource` reads processes read-only in the user's own session. `SystemTweaksViewModel` refreshes them every 3 seconds, and only while the System Tweaks page is shown and the Settings window is active; otherwise the fetcher is idle. Rows update in place. Protected, other-session, and unidentifiable processes are not listed. Selected apps that are not running stay selected.
+- **Activation from Settings.** Settings saves the profile through Runner, resolves the selected names to live targets (`TerminationPlanner`), and sends them directly to EngineSvc (`EngineServiceClient`). It then asks Runner to start the profile's workers. If EngineSvc is unavailable, activation still proceeds and the page reports that apps were not closed.
+- **Flyout.** Runner's quick flyout lists the active profile's running apps and offers **End** and **End all**. Runner tracks those processes with open handles only while the flyout is visible, and sends the targets to EngineSvc from a worker thread.
+- **EngineSvc** validates each target and re-checks its live PID before terminating (see [Process safety](process-safety.md)). It returns one outcome per target: closed, already closed, identity changed, protected, critical, other session, access denied, invalid, or failed.
+- Runner no longer sends process snapshots to Settings, and Settings-driven activation no longer asks Runner to terminate anything.
 
-The WinUI page provides profile-scoped process selection, filtering, fan and cleanup toggles, selection totals, and restore-default behavior, with unit tests.
-
-WinUI saves supported profile fields through Runner and requests a live read-only process snapshot when the page opens and on **Refresh**. A snapshot keeps selected apps that are not currently running, so a refresh never shrinks the saved close list. New profiles select no processes. The fan toggle is disabled to match its unavailable state. The per-profile cleanup toggles and run commands in `SystemTweaksViewModel` are transitional and are not shown. Runner now executes cleanup requests in the user's context rather than in EngineSvc, but the controls stay disabled because the app-wide [Disk cleanup](disk-cleanup.md) page supersedes them. `fan_speed_max` is stored but not applied by Engine command dispatch. PID-level safety validation is not implemented.
+The fan toggle is disabled to match its unavailable state. The per-profile cleanup toggles and run commands in `SystemTweaksViewModel` are transitional and are not shown. `fan_speed_max` is stored but not applied.
 
 ## Architecture dependencies
 
@@ -33,23 +33,25 @@ WinUI saves supported profile fields through Runner and requests a live read-onl
 
 ### Component boundaries
 
-Settings presents choices and validation feedback but never enumerates or terminates processes, changes fan policy, or opens durable state. Runner builds the activation plan, executes user-context work, and delegates only allowlisted machine-level operations to the broker.
+Settings enumerates processes read-only, presents choices, and on activation sends specific targets to EngineSvc. It never terminates processes itself, changes fan policy, or opens durable state. Runner owns workers, persistence, and the flyout; flyout termination also goes to EngineSvc.
+
+The Settings fetcher must idle when the System Tweaks page is not shown or the Settings window is inactive or minimized. The flyout's tracker must idle and release its handles when the flyout is hidden.
 
 ### State ownership and persistence
 
-Profile-scoped selections are durable only through Runner. Restoring a profile repopulates the UI but never terminates processes or applies fan policy until the user issues a new explicit activation command.
+Profile-scoped selections are durable only through Runner. Restoring a profile repopulates the UI but never terminates processes or applies fan policy until the user issues a new explicit activation command. Tracked PIDs and handles are never persisted.
 
 ### IPC and protocol boundary
 
-Process snapshots, activation previews, save commands, and structured per-operation results cross the WinUI/Runner contract. Runner/broker requests remain bounded, versioned, correlated, and independently authorized.
+Save and activation commands cross the WinUI/Runner contract. Termination requests (`EngineCommand::TerminateTargets`) and per-target results cross the Settings/EngineSvc and Runner/EngineSvc contracts. Each request is bounded (at most 128 targets and 64 KiB), versioned, and correlated.
 
 ### Privilege and identity
 
-Runner terminates processes owned by the interactive user itself. Only validated targets it cannot end go to the broker, which exists only in the Full edition. In the Store edition such targets are reported as skipped with the reason "requires Full edition".
+EngineSvc performs every termination for both clients. It exists only in the Full edition. In the Store edition, activation still starts workers, and the result states that apps were not closed.
 
 ### Process safety
 
-UI filtering is advisory. Runner and the final execution boundary normalize targets and reject ambiguous, protected, critical, or changed process identities immediately before termination.
+UI filtering is advisory. Settings and Runner exclude protected, other-session, and unidentifiable processes before sending. EngineSvc repeats all request checks and then re-validates the live PID immediately before termination.
 
 ### Reversible system changes
 
@@ -77,13 +79,15 @@ Partial results remain visible per operation. A failed termination or fan-policy
 ## Relevant implementation and tests
 
 - `crates/core/src/profile.rs` — selected processes and transitional fan-speed profile flag.
-- `crates/core/src/process.rs` — process discovery, normalization, protected-name policy, termination, and safe unit tests.
-- `crates/core/src/orchestration.rs` — activation messages and structured operation results.
-- `crates/core/src/engine_commands.rs` — injectable Engine command routing and fake-operation tests.
-- `crates/runner/src/main.rs` — activation, persistence, and Engine state transitions.
-- `crates/engine_service/src/main.rs` — transitional process execution.
-- `apps/EdgeOptimizer.Settings.Core/ViewModels/SystemTweaksViewModel.cs` — profile selections, live process presentation, and transitional cleanup toggles.
-- `tests/EdgeOptimizer.Settings.Core.Tests/SystemTweaksViewModelTests.cs` — filtering, totals, safe defaults, profile isolation, selection retention across snapshots, and unavailable-Runner feedback tests.
+- `crates/core/src/process.rs` — `ProcessTarget` identity, enumeration, normalization, protected names, target resolution, validated termination, `WatchedProcess`, and unit tests.
+- `crates/core/src/orchestration.rs` — `EngineCommand`/`EngineEvent` and byte-layout tests shared with C#.
+- `crates/core/src/engine_commands.rs` — EngineSvc dispatch with request bounds and fake-operation tests.
+- `crates/engine_service/src/main.rs` — client authentication and termination.
+- `crates/runner/src/tracker.rs`, `crates/runner/src/engine_client.rs`, `crates/runner/src/main.rs` — flyout tracking, off-thread EngineSvc calls, activation, and persistence.
+- `apps/EdgeOptimizer.Settings.Core/Services/ProcessSampler.cs`, `TerminationPlanner.cs`, `ProcessNames.cs`, `EngineProtocol.cs` — Settings-side listing, target planning, and codec.
+- `apps/EdgeOptimizer.Settings.WinUI/Services/WindowsProcessSource.cs`, `EngineServiceClient.cs` — Windows enumeration and the EngineSvc pipe client.
+- `apps/EdgeOptimizer.Settings.Core/ViewModels/SystemTweaksViewModel.cs`, `MainWindowViewModel.cs` — idle-aware fetcher and activation flow.
+- `tests/EdgeOptimizer.Settings.Core.Tests/SystemTweaksViewModelTests.cs`, `ProcessTrackingTests.cs`, `EngineProtocolTests.cs`, `MainWindowViewModelTests.cs` — merge, idling, sampling, planning, codec, and activation tests.
 
 ## Acceptance or verification criteria
 
@@ -91,17 +95,20 @@ Partial results remain visible per operation. A failed termination or fan-policy
 - [x] Normalize protected process names across casing, whitespace, and `.exe` forms.
 - [x] Route process intents through injectable Engine decision logic for safe hosted tests.
 - [x] Keep WinUI process and toggle state independent between profiles, and restore safe defaults deterministically.
-- [x] Replace fixture processes with a Runner-provided read-only snapshot.
-- [ ] Add structured protected and ambiguous selection reasons.
-- [ ] Terminate user-owned processes in Runner, and send only unreachable validated targets to the broker.
+- [x] List running processes in Settings, read-only and same-session, without Runner snapshots.
+- [x] Idle the Settings fetcher when the System Tweaks page is hidden or the window is inactive.
+- [x] Resolve selected names to PID-plus-creation-time targets at activation, and send them from Settings directly to EngineSvc.
+- [x] End the active profile's running apps from Runner's flyout through EngineSvc.
+- [ ] Add structured protected and ambiguous selection reasons in the UI.
 - [ ] Remove the per-profile cleanup toggles once [Disk cleanup](disk-cleanup.md) provides the app-wide page.
 - [ ] Align WinUI 3 and Rust profile contracts for every supported tweak; never imply persistence for preview-only toggles.
 - [ ] Define supported fan-policy hardware, authorization, apply, journaled revert, and unavailable behavior before enabling it.
-- [ ] Validate PID identity and Windows critical or protected state immediately before termination.
-- [ ] Preview the exact activation plan and return killed, missing, skipped, failed, and applied outcomes.
+- [x] Validate PID identity and Windows critical or protected state immediately before termination (logic and unit tests; Windows evidence pending).
+- [x] Return per-target closed, already closed, skipped, and failed outcomes.
+- [ ] Preview the exact activation plan before activation.
 - [ ] Require explicit user intent for termination and machine changes; startup restoration performs no side effects.
 - [ ] Verify privileged and destructive behavior only in an isolated Windows environment, never on hosted CI or a developer machine.
 
 ## Remaining gaps and unknowns
 
-Runner-side termination of user-owned processes, a unified tweak schema, executable fan policy, PID validation, authenticated broker execution, and Windows integration coverage remain planned. Until those contracts exist, the WinUI 3 page must keep identifying unavailable actions as preview-only.
+A unified tweak schema, executable fan policy, an activation preview, and Windows integration coverage remain planned. Termination has been checked only by code inspection and fake-operation unit tests. Real enumeration, PID reuse, session and critical checks, and the pipe's SYSTEM-ownership check need an isolated Windows test environment. Whether a standard-user Settings process can read `PROCESS_QUERY_LIMITED_INFORMATION` for every same-session elevated app is unverified; such apps are omitted from the list when it cannot.

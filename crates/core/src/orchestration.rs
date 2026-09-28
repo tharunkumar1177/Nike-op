@@ -1,11 +1,13 @@
-use crate::process::KillReport;
+use crate::process::{ProcessTarget, TerminationOutcome, TerminationReport};
 use crate::profile::Profile;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub const PROTOCOL_VERSION: u16 = 2;
+/// Shared by the Settings/Runner envelope and the EngineSvc envelope; the
+/// WinUI client's Bincode codecs check the same value.
+pub const PROTOCOL_VERSION: u16 = 3;
 
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -139,25 +141,29 @@ pub struct OperationResult {
 }
 
 impl OperationResult {
-    pub fn from_kill_report(request_id: String, report: KillReport) -> Self {
-        let success = report.failed.is_empty();
-        let summary = format!(
-            "killed={} failed={} not_found={} skipped={}",
-            report.killed.len(),
-            report.failed.len(),
-            report.not_found.len(),
-            report.blocklist_skipped.len()
-        );
-
-        Self {
+    pub fn from_termination(request_id: String, report: &TerminationReport) -> Self {
+        let mut result = Self {
             request_id,
-            success,
-            summary,
-            killed: report.killed,
-            failed: report.failed,
-            not_found: report.not_found,
-            skipped: report.blocklist_skipped,
+            success: report.is_success(),
+            summary: report.summary(),
+            ..Self::default()
+        };
+        for entry in &report.outcomes {
+            let label = format!("{} ({})", entry.target.image_name, entry.target.pid);
+            match entry.outcome {
+                TerminationOutcome::Terminated => result.killed.push(label),
+                TerminationOutcome::NotRunning | TerminationOutcome::IdentityChanged => {
+                    result.not_found.push(label)
+                }
+                TerminationOutcome::Protected
+                | TerminationOutcome::Critical
+                | TerminationOutcome::OutsideSession => result.skipped.push(label),
+                TerminationOutcome::AccessDenied
+                | TerminationOutcome::Invalid
+                | TerminationOutcome::Failed { .. } => result.failed.push(label),
+            }
         }
+        result
     }
 
     pub fn error(request_id: String, summary: impl Into<String>) -> Self {
@@ -179,34 +185,34 @@ pub enum RunnerToSettingsEvent {
     Ack { message: String },
 }
 
-/// Runner-to-engine commands. User-specific cleanup is deliberately absent:
-/// Runner performs it in the interactive user's context.
+/// Commands EngineSvc accepts from its authenticated clients, Runner and
+/// Settings. Variant order is the Bincode tag the WinUI codec writes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum RunnerToEngineCommand {
-    ApplyProfile { profile: Profile },
-    KillProcesses { processes: Vec<String> },
+pub enum EngineCommand {
+    /// Terminate specific process instances; never names or patterns.
+    TerminateTargets {
+        targets: Vec<ProcessTarget>,
+    },
     GetCapabilities,
     Ping,
 }
 
+/// EngineSvc responses. Variant order is the Bincode tag the WinUI codec reads.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum EngineToRunnerEvent {
+pub enum EngineEvent {
     Ack {
         message: String,
     },
-    Progress {
-        message: String,
-    },
-    Result(OperationResult),
     Error {
         code: String,
         recoverable: bool,
         message: String,
     },
     Capabilities {
-        supports_process_kill: bool,
+        supports_process_termination: bool,
     },
     Pong,
+    Termination(TerminationReport),
 }
 
 #[derive(Debug, Default)]
@@ -254,34 +260,98 @@ mod tests {
         assert_eq!(response.protocol_version, PROTOCOL_VERSION);
     }
 
-    #[test]
-    fn operation_result_maps_all_kill_report_categories() {
-        // Verifies safe fixture results map into the orchestration result without terminating a process.
-        let report = KillReport {
-            killed: vec!["closed.exe".into()],
-            failed: vec!["failed.exe".into()],
-            not_found: vec!["missing.exe".into()],
-            blocklist_skipped: vec!["protected.exe".into()],
-        };
-        let result = OperationResult::from_kill_report("request-1".into(), report);
-        assert!(!result.success);
-        assert_eq!(result.killed, ["closed.exe"]);
-        assert_eq!(result.failed, ["failed.exe"]);
-        assert_eq!(result.not_found, ["missing.exe"]);
-        assert_eq!(result.skipped, ["protected.exe"]);
+    fn fixture_target(pid: u32, name: &str) -> ProcessTarget {
+        ProcessTarget {
+            pid,
+            creation_time: 0x1122_3344_5566_7788,
+            image_name: name.into(),
+        }
+    }
+
+    fn fixture_envelope<T>(payload: T) -> Envelope<T> {
+        Envelope {
+            protocol_version: PROTOCOL_VERSION,
+            client_id: "c".into(),
+            request_id: "r".into(),
+            timestamp_unix_ms: 5,
+            auth_context: AuthContext::InteractiveUser,
+            payload,
+        }
+    }
+
+    /// Envelope header for `fixture_envelope`, as Bincode lays it out.
+    fn fixture_header() -> Vec<u8> {
+        let mut bytes = vec![3, 0];
+        bytes.extend([1, 0, 0, 0, 0, 0, 0, 0, b'c']);
+        bytes.extend([1, 0, 0, 0, 0, 0, 0, 0, b'r']);
+        bytes.extend([5, 0, 0, 0, 0, 0, 0, 0]);
+        bytes.extend([0, 0, 0, 0]);
+        bytes
+    }
+
+    fn fixture_target_bytes() -> Vec<u8> {
+        let mut bytes = vec![0x04, 0x03, 0x02, 0x01];
+        bytes.extend([0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11]);
+        bytes.extend([5, 0, 0, 0, 0, 0, 0, 0]);
+        bytes.extend(b"a.exe");
+        bytes
     }
 
     #[test]
-    fn transitional_bincode_command_round_trips() {
-        // Verifies the current Rust-only wire representation remains deterministic during migration.
-        let command = RunnerToEngineCommand::KillProcesses {
-            processes: vec!["fixture.exe".into()],
+    fn operation_result_maps_every_termination_outcome() {
+        // Verifies safe fixture outcomes map into the orchestration result lists without terminating a process.
+        let entry = |pid, outcome| crate::process::TargetOutcome {
+            target: fixture_target(pid, "fixture.exe"),
+            outcome,
         };
-        let encoded = bincode::serialize(&command).unwrap();
-        let decoded: RunnerToEngineCommand = bincode::deserialize(&encoded).unwrap();
+        let report = TerminationReport {
+            outcomes: vec![
+                entry(1, TerminationOutcome::Terminated),
+                entry(2, TerminationOutcome::AccessDenied),
+                entry(3, TerminationOutcome::IdentityChanged),
+                entry(4, TerminationOutcome::Critical),
+            ],
+        };
+        let result = OperationResult::from_termination("request-1".into(), &report);
+        assert!(!result.success);
+        assert_eq!(result.killed, ["fixture.exe (1)"]);
+        assert_eq!(result.failed, ["fixture.exe (2)"]);
+        assert_eq!(result.not_found, ["fixture.exe (3)"]);
+        assert_eq!(result.skipped, ["fixture.exe (4)"]);
+    }
+
+    #[test]
+    fn engine_terminate_request_matches_the_winui_wire_layout() {
+        // Verifies the exact bytes the WinUI EngineProtocol codec writes; both sides assert the same vector.
+        let envelope = fixture_envelope(EngineCommand::TerminateTargets {
+            targets: vec![fixture_target(0x0102_0304, "a.exe")],
+        });
+        let mut expected = fixture_header();
+        expected.extend([0, 0, 0, 0]);
+        expected.extend([1, 0, 0, 0, 0, 0, 0, 0]);
+        expected.extend(fixture_target_bytes());
+        assert_eq!(bincode::serialize(&envelope).unwrap(), expected);
+    }
+
+    #[test]
+    fn engine_termination_response_matches_the_winui_wire_layout() {
+        // Verifies the response bytes the WinUI codec decodes, including a tagged outcome with a payload.
+        let envelope = fixture_envelope(EngineEvent::Termination(TerminationReport {
+            outcomes: vec![crate::process::TargetOutcome {
+                target: fixture_target(0x0102_0304, "a.exe"),
+                outcome: TerminationOutcome::Failed { code: 5 },
+            }],
+        }));
+        let mut expected = fixture_header();
+        expected.extend([4, 0, 0, 0]);
+        expected.extend([1, 0, 0, 0, 0, 0, 0, 0]);
+        expected.extend(fixture_target_bytes());
+        expected.extend([8, 0, 0, 0, 5, 0, 0, 0]);
+        assert_eq!(bincode::serialize(&envelope).unwrap(), expected);
+        let decoded: Envelope<EngineEvent> = bincode::deserialize(&expected).unwrap();
         assert!(matches!(
-            decoded,
-            RunnerToEngineCommand::KillProcesses { processes } if processes == ["fixture.exe"]
+            decoded.payload,
+            EngineEvent::Termination(report) if !report.is_success()
         ));
     }
 
