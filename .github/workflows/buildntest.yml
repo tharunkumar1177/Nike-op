@@ -190,8 +190,17 @@ jobs:
         run: |
           dotnet tool install --global wix --version $env:WIX_VERSION
           if ($LASTEXITCODE -ne 0) { throw "Installing WiX $env:WIX_VERSION failed." }
-          wix extension add --global "WixToolset.Bal.wixext/$env:WIX_VERSION"
-          if ($LASTEXITCODE -ne 0) { throw "Installing the WiX Bal extension failed." }
+          # The WixToolset.Bal.wixext package ships its DLL as
+          # WixToolset.BootstrapperApplications.wixext.dll, which `-ext <package id>`
+          # cannot resolve, so fetch the pinned package and reference the DLL by path.
+          $extRoot = Join-Path $env:RUNNER_TEMP 'wix-bal'
+          $nupkg = Join-Path $env:RUNNER_TEMP "wixtoolset.bal.wixext.$env:WIX_VERSION.zip"
+          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/wixtoolset.bal.wixext/$env:WIX_VERSION/wixtoolset.bal.wixext.$env:WIX_VERSION.nupkg" -OutFile $nupkg
+          Expand-Archive -Path $nupkg -DestinationPath $extRoot -Force
+          $balExt = @(Get-ChildItem -Path (Join-Path $extRoot 'wixext5') -Filter '*.wixext.dll')
+          if ($balExt.Count -ne 1) { throw "Expected one extension DLL in the WixToolset.Bal.wixext $env:WIX_VERSION package, found $($balExt.Count)." }
+          $balExt = $balExt[0]
+          "WIX_BAL_EXT=$($balExt.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build MSI and setup executable
         run: |
@@ -205,7 +214,7 @@ jobs:
           wix build installer/EdgeOptimizer.wxs -arch x64 -d "ProductVersion=$version" -bindpath "App=$(Join-Path $PWD 'bundle')" -o $msi
           if ($LASTEXITCODE -ne 0) { throw "Building the MSI failed." }
 
-          wix build installer/Bundle.wxs -arch x64 -ext WixToolset.Bal.wixext -d "ProductVersion=$version" -d "MsiPath=$msi" -o $setup
+          wix build installer/Bundle.wxs -arch x64 -ext $env:WIX_BAL_EXT -d "ProductVersion=$version" -d "MsiPath=$msi" -o $setup
           if ($LASTEXITCODE -ne 0) { throw "Building the setup executable failed." }
 
           New-Item -ItemType Directory -Force -Path dist | Out-Null
