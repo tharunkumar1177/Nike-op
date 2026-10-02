@@ -8,15 +8,18 @@ Each edition installs, starts, updates, and uninstalls as one unit. The Store ed
 
 **Status:** Partial
 
-The install-layout rules are implemented. No installer or package exists yet. Code inspection on 2026-09-28:
+The install-layout rules are implemented. An unsigned Full edition MSI and setup executable are built in CI but have not been verified on a clean machine. The Store edition is deferred: its status is **Planned**, and no MSIX manifest or packaging job exists. Code inspection on 2026-10-02:
 
-- The `bundle` job in `.github/workflows/buildntest.yml` copies the release Runner, Crosshair, Macro, and EngineSvc executables and the self-contained WinUI publish output into one unpackaged artifact folder. No MSIX manifest, WiX project, signing step, or installer exists.
-- The `release` job in the same workflow runs only for pushed `v*` tags. It rejects tags that do not match the workspace version, zips the unsigned bundle with a SHA-256 checksum file, and publishes a GitHub release. Tags containing a pre-release suffix are published as pre-releases.
+- The `bundle` job in `.github/workflows/buildntest.yml` copies the release Runner, Crosshair, Macro, and EngineSvc executables and the self-contained WinUI publish output into one unpackaged artifact folder.
+- `.cargo/config.toml` links the C runtime statically for `x86_64-pc-windows-msvc`, so the Rust executables do not require the Visual C++ redistributable.
+- The `installer` job builds `installer/EdgeOptimizer.wxs` with WiX v5 into a per-machine MSI. The MSI installs every bundle file except `.pdb` files under `%ProgramFiles%\Edge Optimizer` and adds a Start menu shortcut to Runner. It uses a fixed upgrade code and `MajorUpgrade`, so a newer version replaces an older one and downgrades are blocked. It then builds `installer/Bundle.wxs` into a Burn setup executable that embeds the MSI, hides the license link and the install-folder option, and offers to launch Runner after installation. Neither file is code-signed.
+- The MSI installs `EdgeOptimizer_EngineSvc.exe` but does not register it. EngineSvc does not yet implement the Service Control Manager protocol, so an SCM registration would fail to start.
+- The `release` job runs only for pushed `v*` tags. It rejects tags that do not match the workspace version and publishes a GitHub release with the setup executable, the MSI, the zipped bundle, and a SHA-256 checksum file. Tags containing a pre-release suffix are published as pre-releases.
 - Runner, the crosshair launcher, and the Macro launcher resolve Settings and the workers only through `crates/core/src/install_layout.rs`. It accepts only bare `.exe` names and joins them to the running image's directory; traversal, absolute, drive-relative, padded, and non-executable names are rejected by unit tests.
 - Runner stops the crosshair and Macro workers through the process handles it owns.
 - The legacy Iced settings crate and `engine_ctl` have been deleted from the workspace.
-- No code registers Runner to start at sign-in.
-- The broker is installed only by `scripts/install-engine-service.ps1` as a SYSTEM scheduled task.
+- No code registers Runner to start at sign-in, and the MSI does not either.
+- The broker is registered only by `scripts/install-engine-service.ps1` as a SYSTEM scheduled task. After an MSI install, pass `-BinaryPath "$env:ProgramFiles\Edge Optimizer\EdgeOptimizer_EngineSvc.exe"` to register the installed copy.
 - `apps/EdgeOptimizer.Settings.WinUI` is built with `WindowsPackageType=None` and a self-contained Windows App SDK.
 
 ## Architecture dependencies
@@ -83,7 +86,10 @@ CI builds and validates package structure, signatures, and manifest schema. Inst
 
 ## Relevant implementation and tests
 
-- `.github/workflows/buildntest.yml` — current `bundle` and tag-driven `release` jobs; future MSIX and WiX packaging jobs.
+- `.github/workflows/buildntest.yml` — current `bundle`, `installer`, and tag-driven `release` jobs; future MSIX packaging job.
+- `installer/EdgeOptimizer.wxs` — Full edition per-machine MSI.
+- `installer/Bundle.wxs` — Full edition Burn setup executable.
+- `.cargo/config.toml` — static C runtime linkage for installed Rust executables.
 - `scripts/publish-winui-settings.ps1` — current WinUI publish beside Runner.
 - `scripts/install-engine-service.ps1` — transitional scheduled-task installer to be replaced by the WiX service registration.
 - `apps/EdgeOptimizer.Settings.WinUI/EdgeOptimizer.Settings.WinUI.csproj` — packaging type and Windows App SDK deployment mode.
@@ -96,7 +102,7 @@ CI builds and validates package structure, signatures, and manifest schema. Inst
 
 - [ ] CI produces an unsigned `.msixupload` for Store submission and a test-signed `.msix` for sideload validation.
 - [ ] The Store manifest declares only `runFullTrust`, a Runner startup task, a Settings application without a Start menu entry, and a Windows App SDK framework dependency.
-- [ ] CI produces a signed Full edition setup executable containing the per-machine MSI.
+- [ ] CI produces a signed Full edition setup executable containing the per-machine MSI. (CI builds it unsigned; signing is pending a certificate.)
 - [ ] The Full edition installs, repairs, upgrades, and uninstalls the broker service with recovery actions and leaves no orphaned service or task.
 - [x] Every component resolves sibling executables only beside Runner's image.
 - [x] Runner stops workers by the process handle it owns, never by image name.
@@ -107,6 +113,10 @@ CI builds and validates package structure, signatures, and manifest schema. Inst
 - [ ] Install, upgrade, uninstall, startup, and exclusivity are verified on clean Windows virtual machines.
 
 ## Remaining gaps and unknowns
+
+- The Store edition is deferred to a future release; every Store criterion above is Planned.
+- EngineSvc needs Service Control Manager support before the MSI can register it as a service with recovery actions and a service security descriptor.
+- The MSI does not detect or remove an existing `EdgeOptimizerEngineSvcHost` scheduled task.
 
 - Partner Center identity values (package name, publisher, and publisher display name) are not yet available and must be supplied before a Store build can be submitted.
 - A code-signing certificate for the Full edition, and hosting and update delivery for it, are not yet selected.

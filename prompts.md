@@ -341,3 +341,10 @@ packets module to moule
 - Edge optimizer should be listed in startup apps (for runner to act as event loop)
 
 
+
+To cut a release:
+```
+git tag v0.1.0
+git push origin v0.1.0
+
+```

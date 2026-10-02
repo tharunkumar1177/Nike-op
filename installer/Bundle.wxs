@@ -1,0 +1,31 @@
+<!--
+  Full edition setup executable that chains the per-machine MSI.
+
+  Build with:
+    wix build installer/Bundle.wxs -arch x64 -ext WixToolset.Bal.wixext
+      -d ProductVersion=<MAJOR.MINOR.PATCH> -d MsiPath=<path to EdgeOptimizer.msi>
+      -o EdgeOptimizer-Setup.exe
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+  <Bundle
+    Name="Edge Optimizer"
+    Manufacturer="Edge Optimizer"
+    Version="$(var.ProductVersion)"
+    UpgradeCode="6D66FCED-C784-433B-A9C3-D4453AD3CED0">
+
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication
+        Theme="hyperlinkLicense"
+        LicenseUrl=""
+        SuppressOptionsUI="yes"
+        ShowVersion="yes"
+        LaunchTarget="[ProgramFiles64Folder]Edge Optimizer\EdgeOptimizer_Runner.exe"
+        LaunchWorkingFolder="[ProgramFiles64Folder]Edge Optimizer" />
+    </BootstrapperApplication>
+
+    <Chain>
+      <MsiPackage SourceFile="$(var.MsiPath)" />
+    </Chain>
+  </Bundle>
+</Wix>

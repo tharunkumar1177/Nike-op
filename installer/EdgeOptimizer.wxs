@@ -1,0 +1,65 @@
+<!--
+  Full edition per-machine MSI.
+
+  Build with:
+    wix build installer/EdgeOptimizer.wxs -arch x64 -d ProductVersion=<MAJOR.MINOR.PATCH>
+      -bindpath App=<bundle folder> -o EdgeOptimizer.msi
+
+  The bundle folder is the CI `edge-optimizer-windows-x64` artifact.
+  EdgeOptimizer_EngineSvc.exe is installed but not registered: it does not yet
+  implement the Service Control Manager protocol.
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="Edge Optimizer"
+    Manufacturer="Edge Optimizer"
+    Version="$(var.ProductVersion)"
+    UpgradeCode="B1EF530E-B388-488E-A567-5E71CC92141C"
+    Language="1033"
+    Scope="perMachine">
+
+    <MajorUpgrade
+      DowngradeErrorMessage="A newer version of [ProductName] is already installed."
+      Schedule="afterInstallInitialize" />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Edge Optimizer" />
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="Edge Optimizer" Level="1">
+      <ComponentGroupRef Id="ApplicationFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="ApplicationFiles" Directory="INSTALLFOLDER">
+      <Files Include="!(bindpath.App)\**">
+        <Exclude Files="!(bindpath.App)\**.pdb" />
+      </Files>
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="FA36C4D3-3B88-43D6-9A8D-BA1C0F844F74">
+        <Shortcut
+          Id="RunnerStartMenuShortcut"
+          Name="Edge Optimizer"
+          Description="Start the Edge Optimizer tray agent"
+          Target="[INSTALLFOLDER]EdgeOptimizer_Runner.exe"
+          WorkingDirectory="INSTALLFOLDER" />
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\EdgeOptimizer\Installer"
+          Name="StartMenuShortcut"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+  </Fragment>
+</Wix>

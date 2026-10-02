@@ -163,9 +163,64 @@ jobs:
           path: bundle
           if-no-files-found: error
 
+  installer:
+    name: Build unsigned Windows installer
+    needs: [bundle]
+    runs-on: windows-latest
+    env:
+      WIX_VERSION: 5.0.2
+      DOTNET_ROLL_FORWARD: Major
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install .NET 10 SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Download runnable Windows bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: edge-optimizer-windows-x64
+          path: bundle
+
+      - name: Install WiX Toolset
+        run: |
+          dotnet tool install --global wix --version $env:WIX_VERSION
+          if ($LASTEXITCODE -ne 0) { throw "Installing WiX $env:WIX_VERSION failed." }
+          wix extension add --global "WixToolset.Bal.wixext/$env:WIX_VERSION"
+          if ($LASTEXITCODE -ne 0) { throw "Installing the WiX Bal extension failed." }
+
+      - name: Build MSI and setup executable
+        run: |
+          $match = Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(\d+\.\d+\.\d+)' | Select-Object -First 1
+          if (-not $match) { throw "Cannot read the workspace version from Cargo.toml." }
+          $version = $match.Matches[0].Groups[1].Value
+          New-Item -ItemType Directory -Force -Path installer-out | Out-Null
+          $msi = Join-Path $PWD 'installer-out/EdgeOptimizer-windows-x64.msi'
+          $setup = Join-Path $PWD 'installer-out/EdgeOptimizer-Setup-windows-x64.exe'
+
+          wix build installer/EdgeOptimizer.wxs -arch x64 -d "ProductVersion=$version" -bindpath "App=$(Join-Path $PWD 'bundle')" -o $msi
+          if ($LASTEXITCODE -ne 0) { throw "Building the MSI failed." }
+
+          wix build installer/Bundle.wxs -arch x64 -ext WixToolset.Bal.wixext -d "ProductVersion=$version" -d "MsiPath=$msi" -o $setup
+          if ($LASTEXITCODE -ne 0) { throw "Building the setup executable failed." }
+
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item $msi, $setup dist/
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: edge-optimizer-windows-x64-installer
+          path: dist
+          if-no-files-found: error
+
   release:
     name: Publish GitHub release
-    needs: [bundle]
+    needs: [bundle, installer]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
     permissions:
@@ -196,27 +251,41 @@ jobs:
           name: edge-optimizer-windows-x64
           path: bundle
 
-      - name: Package release archive
+      - name: Download Windows installer
+        uses: actions/download-artifact@v4
+        with:
+          name: edge-optimizer-windows-x64-installer
+          path: installer-out
+
+      - name: Package release assets
         env:
           TAG: ${{ github.ref_name }}
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          $archive = "dist/EdgeOptimizer-$env:TAG-windows-x64.zip"
-          Compress-Archive -Path bundle/* -DestinationPath $archive -CompressionLevel Optimal
-          $hash = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLowerInvariant()
-          "$hash  $(Split-Path $archive -Leaf)" | Set-Content -Path dist/SHA256SUMS.txt -Encoding ascii
+          Compress-Archive -Path bundle/* -DestinationPath "dist/EdgeOptimizer-$env:TAG-windows-x64.zip" -CompressionLevel Optimal
+          Copy-Item installer-out/EdgeOptimizer-windows-x64.msi "dist/EdgeOptimizer-$env:TAG-windows-x64.msi"
+          Copy-Item installer-out/EdgeOptimizer-Setup-windows-x64.exe "dist/EdgeOptimizer-$env:TAG-Setup-windows-x64.exe"
+          $lines = Get-ChildItem dist -File | Sort-Object Name | ForEach-Object {
+            "$((Get-FileHash -Algorithm SHA256 -Path $_.FullName).Hash.ToLowerInvariant())  $($_.Name)"
+          }
+          $lines | Set-Content -Path dist/SHA256SUMS.txt -Encoding ascii
 
       - name: Create or update the release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          $assets = @("dist/EdgeOptimizer-$env:TAG-windows-x64.zip", "dist/SHA256SUMS.txt")
+          $assets = @(
+            "dist/EdgeOptimizer-$env:TAG-Setup-windows-x64.exe",
+            "dist/EdgeOptimizer-$env:TAG-windows-x64.msi",
+            "dist/EdgeOptimizer-$env:TAG-windows-x64.zip",
+            "dist/SHA256SUMS.txt"
+          )
           gh release view $env:TAG *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $env:TAG @assets --clobber
           } else {
-            $notes = "Unsigned, unpackaged Windows x64 build. Extract the archive and start EdgeOptimizer_Runner.exe. This archive does not register the privileged engine service."
+            $notes = "Unsigned Windows x64 build. Run the Setup executable (or the MSI) to install into Program Files with a Start menu shortcut; Windows SmartScreen will warn because the installer is not code-signed. The zip is the same files unpackaged. The privileged engine service is installed but not registered."
             $createArgs = @($env:TAG) + $assets + @('--title', "Edge Optimizer $env:TAG", '--notes', $notes, '--generate-notes', '--verify-tag')
             if ($env:TAG.Contains('-')) { $createArgs += '--prerelease' }
             gh release create @createArgs
